@@ -267,7 +267,7 @@ class App:
                  font=("Arial", 14), justify="center").pack(pady=20)
 
         self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center")
-        self.entry_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y"))
         self.entry_date.pack(pady=5)
         tk.Label(frame, text=t["date"]).pack(pady=5)
 
@@ -381,7 +381,7 @@ class App:
         raw = self.translate_layout(raw)
 
         if self.state.wait_sscc:
-            # Валидация SSCC: должен начинаться с 00 и иметь 20 цифр
+            # Валидация SSCC: должен начинаться с 00 и иметь 18-20 цифр
             if not raw.startswith("00") or not raw.isdigit() or len(raw) < 18:
                 err = "Неверный формат SSCC (должен начинаться с 00 и содержать 18-20 цифр)"
                 self.errors.add(raw, err)
@@ -421,20 +421,20 @@ class App:
             return []
 
         timestamp = summary["start_time"].strftime("%Y%m%d_%H%M%S")
-        base_name = f"shift_{self.shift_info['workplace']}_{timestamp}"
 
         os.makedirs("output", exist_ok=True)
         generated_paths = []
 
-        # Сохранение TXT (XML)
-        generated_paths.extend(self.save_files_split(summary, base_name, "txt"))
+        # 1. Сохранение агрегации (TXT/XML и XLSX)
+        generated_paths.extend(self.save_aggregation_reports(summary, timestamp))
 
-        # Сохранение Excel (XLSX)
-        generated_paths.extend(self.save_files_split(summary, base_name, "xlsx"))
+        # 2. Сохранение отчета о нанесении (XLSX)
+        generated_paths.extend(self.save_production_reports(summary, timestamp))
 
         return generated_paths
 
-    def save_files_split(self, summary, base_name, extension):
+    def save_aggregation_reports(self, summary, timestamp):
+        base_name = f"агрегация_{self.shift_info['workplace']}_{timestamp}"
         codes_per_file = 30000
         file_idx = 1
         current_codes_count = 0
@@ -442,14 +442,44 @@ class App:
         paths = []
 
         def write_part(boxes, idx):
-            filename = f"output/{base_name}_{idx}.{extension}"
-            if extension == "txt":
-                content = self.generate_xml_content(boxes)
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(content)
-            elif extension == "xlsx":
-                self.generate_excel_file(boxes, filename)
-            return filename
+            # XML
+            xml_fn = f"output/{base_name}_{idx}.txt"
+            with open(xml_fn, "w", encoding="utf-8") as f:
+                f.write(self.generate_xml_content(boxes))
+
+            # Excel Агрегация
+            xls_fn = f"output/{base_name}_{idx}.xlsx"
+            self.generate_excel_aggregation(boxes, xls_fn)
+
+            return [xml_fn, xls_fn]
+
+        for sscc, units in summary["data"]:
+            if current_codes_count + len(units) > codes_per_file:
+                paths.extend(write_part(current_boxes, file_idx))
+                file_idx += 1
+                current_boxes = []
+                current_codes_count = 0
+
+            current_boxes.append((sscc, units))
+            current_codes_count += len(units)
+
+        if current_boxes:
+            paths.extend(write_part(current_boxes, file_idx))
+
+        return paths
+
+    def save_production_reports(self, summary, timestamp):
+        base_name = f"нанесение_{self.shift_info['workplace']}_{timestamp}"
+        codes_per_file = 30000
+        file_idx = 1
+        current_codes_count = 0
+        current_boxes = []
+        paths = []
+
+        def write_part(boxes, idx):
+            xls_fn = f"output/{base_name}_{idx}.xlsx"
+            self.generate_excel_production(boxes, xls_fn)
+            return xls_fn
 
         for sscc, units in summary["data"]:
             if current_codes_count + len(units) > codes_per_file:
@@ -487,13 +517,30 @@ class App:
         xml += '</unit_pack>'
         return xml
 
-    def generate_excel_file(self, boxes, filename):
+    def generate_excel_aggregation(self, boxes, filename):
         wb = openpyxl.Workbook()
         ws = wb.active
-        # Только коды маркировки, один в строке, без криптохвоста
+        ws.append(["AGGREGATE", "ITEM"])
         for sscc, units in boxes:
             for u in units:
-                ws.append([u['clean']])
+                ws.append([sscc, u['clean']])
+        wb.save(filename)
+
+    def generate_excel_production(self, boxes, filename):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # Поля: Название продукта, КМ, GTIN, GTIN, Декларация, Номер ДС, Дата производства
+        for sscc, units in boxes:
+            for u in units:
+                ws.append([
+                    self.config["product_name"],
+                    u["clean"],
+                    u["gtin"],
+                    u["gtin"],
+                    "Декларация",
+                    self.config["ds_number"],
+                    self.shift_info["date"]
+                ])
         wb.save(filename)
 
     # -------------------------------------------------
@@ -521,9 +568,7 @@ class App:
             for path in files:
                 if os.path.exists(path):
                     with open(path, "rb") as f:
-                        # Фильтруем только нужные расширения
-                        if path.endswith((".txt", ".xlsx")):
-                            requests.post(url_doc, data={"chat_id": chat_id}, files={"document": f}, timeout=10)
+                        requests.post(url_doc, data={"chat_id": chat_id}, files={"document": f}, timeout=10)
         except Exception as e:
             print(f"Telegram error: {e}")
 
