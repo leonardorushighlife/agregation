@@ -6,12 +6,14 @@ import threading
 import time
 
 class DuplicateChecker:
-    def __init__(self, db_path="data/duplicates.db", is_server=False):
+    def __init__(self, db_path="data/duplicates.db", is_server=False, access_key=""):
         self.db_path = db_path
         self.is_server = is_server
+        self.access_key = access_key
         self.server_ip = None
         self.port = 5555
         self.udp_port = 5556
+        self.running = True
 
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
@@ -40,40 +42,58 @@ class DuplicateChecker:
 
     def _run_tcp_server(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('0.0.0.0', self.port))
-            s.listen()
-            while True:
-                conn, addr = s.accept()
-                with conn:
-                    data = conn.recv(1024).decode('utf-8')
-                    if not data: continue
-                    req = json.loads(data)
-                    res = self._handle_network_request(req)
-                    conn.sendall(json.dumps(res).encode('utf-8'))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('0.0.0.0', self.port))
+                s.listen()
+                while self.running:
+                    conn, addr = s.accept()
+                    with conn:
+                        try:
+                            data = conn.recv(2048).decode('utf-8')
+                            if not data: continue
+                            req = json.loads(data)
+
+                            # Проверка ключа доступа
+                            if req.get('key') != self.access_key:
+                                res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ доступа к серверу"}
+                            else:
+                                res = self._handle_network_request(req)
+
+                            conn.sendall(json.dumps(res).encode('utf-8'))
+                        except Exception as e:
+                            print(f"Server error handling client: {e}")
+            except Exception as e:
+                print(f"Could not start TCP server: {e}")
 
     def _run_udp_broadcast_responder(self):
         """Отвечает клиентам, где находится сервер"""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.bind(('', self.udp_port))
-            while True:
-                data, addr = s.recvfrom(1024)
-                if data == b"WHERE_IS_GS1_SERVER":
-                    s.sendto(b"I_AM_GS1_SERVER", addr)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('', self.udp_port))
+                while self.running:
+                    data, addr = s.recvfrom(1024)
+                    if data == b"WHERE_IS_GS1_SERVER":
+                        s.sendto(b"I_AM_GS1_SERVER", addr)
+            except Exception as e:
+                print(f"Could not start UDP responder: {e}")
 
     def start_discovery_thread(self):
         """Поиск сервера в сети"""
         threading.Thread(target=self._discover_server, daemon=True).start()
 
     def _discover_server(self):
-        while not self.server_ip:
+        while self.running and not self.server_ip:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 s.settimeout(2)
                 try:
-                    s.sendto(b"WHERE_IS_GS1_SERVER", ('<broadcast>', self.udp_port))
+                    s.sendto(b"WHERE_IS_GS1_SERVER", ('255.255.255.255', self.udp_port))
                     data, addr = s.recvfrom(1024)
                     if data == b"I_AM_GS1_SERVER":
                         self.server_ip = addr[0]
+                        print(f"Found server at {self.server_ip}")
                 except:
                     time.sleep(3)
 
@@ -88,14 +108,20 @@ class DuplicateChecker:
             return {"status": "error", "message": str(e)}
 
     def network_request(self, req):
-        if not self.server_ip: return {"status": "local_only"}
+        if not self.server_ip:
+            return {"status": "local_only"}
+
+        req['key'] = self.access_key # Добавляем ключ в запрос
+
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
+                s.settimeout(3)
                 s.connect((self.server_ip, self.port))
                 s.sendall(json.dumps(req).encode('utf-8'))
-                return json.loads(s.recv(1024).decode('utf-8'))
-        except:
+                response = s.recv(2048).decode('utf-8')
+                return json.loads(response)
+        except Exception as e:
+            print(f"Network request failed: {e}")
             return {"status": "local_only"}
 
     # --- ПРОВЕРКИ ---
