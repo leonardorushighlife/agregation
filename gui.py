@@ -95,6 +95,7 @@ class App:
         self.lang = None
         self.state = State(self.config["box_size"])
         self.paused = False
+        self.boxes_since_save = 0
 
         self.duplicates = DuplicateChecker(self.config["db_path"])
         self.errors = ErrorLog()
@@ -130,7 +131,7 @@ class App:
             command=self.admin_login
         ).place(x=680, y=10, width=30, height=30)
 
-        tk.Label(frame, text="Select language", font=("Arial", 18)).pack(pady=30)
+        tk.Label(frame, text="Выберите язык / Select language", font=("Arial", 18)).pack(pady=30)
 
         for key in TEXT:
             tk.Button(
@@ -147,16 +148,16 @@ class App:
         self.show_shift_form()
 
     # -------------------------------------------------
-    # ADMIN
+    # ADMIN (RU ONLY)
     # -------------------------------------------------
 
     def admin_login(self):
         win = tk.Toplevel(self.root)
-        win.title("Admin")
+        win.title("Вход в админ-панель")
         win.geometry("320x180")
         win.resizable(False, False)
 
-        tk.Label(win, text="Password").pack(pady=15)
+        tk.Label(win, text="Введите пароль").pack(pady=15)
         entry = tk.Entry(win, show="*")
         entry.pack()
 
@@ -165,13 +166,13 @@ class App:
                 win.destroy()
                 self.admin_panel()
             else:
-                messagebox.showerror("Error", "Wrong password")
+                messagebox.showerror("Ошибка", "Неверный пароль")
 
-        tk.Button(win, text="OK", command=check).pack(pady=20)
+        tk.Button(win, text="Войти", command=check).pack(pady=20)
 
     def admin_panel(self):
         win = tk.Toplevel(self.root)
-        win.title("Admin panel")
+        win.title("Панель администратора")
         win.geometry("600x680")
         win.resizable(False, False)
 
@@ -187,35 +188,35 @@ class App:
             return e
 
         row = 0
-        tk.Label(win, text="Settings").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        tk.Label(win, text="Настройки системы", font=("Arial", 12, "bold")).grid(row=row, column=0, columnspan=3, padx=10, pady=10, sticky="w")
         row += 1
 
         box_entry = tk.Entry(win, width=10)
         box_entry.insert(0, str(self.config["box_size"]))
         box_entry.grid(row=row, column=1, sticky="w")
-        tk.Label(win, text="Box size (5–200)").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        tk.Label(win, text="Размер короба (5–200)").grid(row=row, column=0, padx=10, pady=5, sticky="w")
         limit_var = tk.BooleanVar(value=self.config["limit_enabled"])
-        tk.Checkbutton(win, text="Limit", variable=limit_var).grid(row=row, column=2)
+        tk.Checkbutton(win, text="Лимит 180 дней", variable=limit_var).grid(row=row, column=2)
 
         row += 1
-        tin_e = block("LP TIN", self.config["lp_tin"], None, row)
+        tin_e = block("ИНН организации", self.config["lp_tin"], None, row)
         row += 1
-        db_e = block("DB Path", self.config["db_path"], None, row)
+        db_e = block("Путь к базе данных", self.config["db_path"], None, row)
         row += 1
-        gtin_e, gtin_v = block("GTIN", self.config["gtin"], self.config["gtin_enabled"], row)
+        gtin_e, gtin_v = block("GTIN (эталон)", self.config["gtin"], self.config["gtin_enabled"], row)
         row += 1
-        prod_e, prod_v = block("Product name", self.config["product_name"], self.config["product_enabled"], row)
+        prod_e, prod_v = block("Название продукта", self.config["product_name"], self.config["product_enabled"], row)
         row += 1
-        tnved_e, tnved_v = block("TN VED", self.config["tnved"], self.config["tnved_enabled"], row)
+        tnved_e, tnved_v = block("ТН ВЭД", self.config["tnved"], self.config["tnved_enabled"], row)
         row += 1
-        ds_e, ds_v = block("DS number", self.config["ds_number"], self.config["ds_enabled"], row)
+        ds_e, ds_v = block("Номер ДС", self.config["ds_number"], self.config["ds_enabled"], row)
         row += 1
 
-        tk.Label(win, text="Telegram").grid(row=row, column=0, padx=10, pady=10, sticky="w")
+        tk.Label(win, text="Настройки Telegram", font=("Arial", 12, "bold")).grid(row=row, column=0, columnspan=3, padx=10, pady=10, sticky="w")
         row += 1
-        tg_token_e = block("Bot Token", self.config["tg_token"], None, row)
+        tg_token_e = block("Токен бота", self.config["tg_token"], None, row)
         row += 1
-        tg_chat_e = block("Chat ID", self.config["tg_chat_id"], None, row)
+        tg_chat_e = block("ID чата", self.config["tg_chat_id"], None, row)
 
         def save():
             try:
@@ -223,7 +224,7 @@ class App:
                 if not 5 <= val <= 200:
                     raise ValueError
             except:
-                messagebox.showerror("Error", "Invalid box size")
+                messagebox.showerror("Ошибка", "Некорректный размер короба")
                 return
 
             self.config.update({
@@ -246,11 +247,11 @@ class App:
             save_config(self.config)
             self.state.reset(val)
             self.duplicates = DuplicateChecker(self.config["db_path"]) # Re-init DB
-            messagebox.showinfo("OK", "Saved")
+            messagebox.showinfo("Успех", "Настройки сохранены")
             win.destroy()
 
         row += 1
-        tk.Button(win, text="Save", command=save, width=20, height=2).grid(row=row, column=1, pady=20)
+        tk.Button(win, text="Сохранить", command=save, width=20, height=2, bg="#4CAF50", fg="white").grid(row=row, column=1, pady=20)
 
     # -------------------------------------------------
     # SHIFT FORM
@@ -294,6 +295,7 @@ class App:
             "name": self.entry_name.get()
         }
         self.state.reset(self.config["box_size"])
+        self.boxes_since_save = 0
         self.show_scan_screen()
 
     # -------------------------------------------------
@@ -390,7 +392,14 @@ class App:
 
             self.state.scan_sscc(raw)
             self.show_last(f"SSCC: {raw}")
-            self.update_info(box_closed=True)
+
+            # Автосохранение каждые 30 коробок
+            self.boxes_since_save += 1
+            if self.boxes_since_save >= 30:
+                self.perform_save()
+                self.boxes_since_save = 0
+
+            self.update_info()
             return
 
         try:
