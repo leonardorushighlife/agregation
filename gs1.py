@@ -8,12 +8,12 @@ def parse_gs1(raw: str) -> dict:
     if not raw:
         raise GS1Error("Пустой код")
 
-    # 1. Проверка на запрещенные текстовые вставки
-    if "FNC1" in raw or "GS" in raw:
-        if raw.startswith("FNC1") or raw.startswith("GS") or "GS" in raw:
-             raise GS1Error("Нарушение структуры GS1 DataMatrix (текстовое FNC1/GS)")
+    # 1. Проверка на запрещенные текстовые вставки (ТОЛЬКО В НАЧАЛЕ)
+    # Буквы GS внутри кода (например GLGS) - это нормально.
+    if raw.startswith("FNC1") or raw.startswith("GS"):
+        raise GS1Error("Нарушение структуры: код не может начинаться с текста 'FNC1' или 'GS'")
 
-    # 2. Проверка на запрещенный первый символ GS
+    # 2. Проверка на запрещенный первый символ GS (управляющий символ)
     if raw.startswith(GS):
         raise GS1Error("Нарушение структуры GS1 DataMatrix (первым символом GS)")
 
@@ -30,8 +30,9 @@ def parse_gs1(raw: str) -> dict:
         data = data[1:]
 
     # 4. Логическая проверка FNC1 по структуре
+    # После очистки код Честного Знака ДОЛЖЕН начинаться с 01 (GTIN)
     if not data.startswith("01"):
-        raise GS1Error("Нарушение структуры GS1 DataMatrix (отсутствует логический FNC1/01)")
+        raise GS1Error("Нарушение структуры GS1: отсутствует логический FNC1 (код должен начинаться с 01)")
 
     # AI (01) GTIN — 14 цифр
     if len(data) < 16:
@@ -39,21 +40,22 @@ def parse_gs1(raw: str) -> dict:
 
     gtin = data[2:16]
     if not gtin.isdigit() or len(gtin) != 14:
-        raise GS1Error("Неверный формат GTIN")
+        raise GS1Error("Неверный формат GTIN (должно быть 14 цифр)")
 
     rest = data[16:]
 
     # 5. AI (21) Серийный номер
     if not rest.startswith("21"):
-        raise GS1Error("Нарушение структуры GS1 DataMatrix (ожидался AI 21 после GTIN)")
+        raise GS1Error("Нарушение структуры: ожидался AI 21 (серийный номер) после GTIN")
 
     rest = rest[2:]
 
     # 6. Обработка серийного номера и криптохвоста
+    # Ищем разделитель GS (невидимый символ \x1d)
     if GS in rest:
         serial, tail = rest.split(GS, 1)
     else:
-        # Ищем AI 93 как начало криптохвоста
+        # Если разделителя нет, ищем AI 93 как начало криптохвоста
         idx_93 = rest.find("93")
         if idx_93 != -1:
             serial = rest[:idx_93]
