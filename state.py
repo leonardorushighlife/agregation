@@ -10,40 +10,36 @@ class State:
         self.box = 1
         self.in_box = 0
         self.wait_sscc = False
-
-        # Данные текущей смены
-        self.current_box_units = []  # Данные (dict) КМ в текущем коробе
+        self.current_box_units = []
         self.boxes_data = []         # Список (sscc, [unit_data])
         self.shift_start_time = datetime.now()
         self.total_codes_in_shift = 0
 
-    def scan_unit(self, parsed_data: dict):
-        if self.wait_sscc:
-            return False
+    def load_recovery(self, boxes):
+        """Загрузка данных из БД после сбоя"""
+        self.boxes_data = boxes
+        self.box = len(boxes) + 1
+        self.total_codes_in_shift = sum(len(units) for _, units in boxes)
 
+    def scan_unit(self, parsed_data: dict):
+        if self.wait_sscc: return False
         self.current_box_units.append(parsed_data)
         self.in_box += 1
         self.total_codes_in_shift += 1
-
         if self.in_box >= self.box_size:
             self.wait_sscc = True
             return "WAIT_SSCC"
-
         return "UNIT_OK"
 
     def scan_sscc(self, sscc: str):
-        if not self.wait_sscc:
-            return False
-
-        # Закрываем короб
+        if not self.wait_sscc: return False
         self.boxes_data.append((sscc, self.current_box_units))
-
-        # Сброс для следующего короба
+        last_units = self.current_box_units
         self.current_box_units = []
         self.in_box = 0
         self.wait_sscc = False
         self.box += 1
-        return "BOX_CLOSED"
+        return last_units # Возвращаем юниты для записи в БД
 
     def get_shift_summary(self):
         return {
