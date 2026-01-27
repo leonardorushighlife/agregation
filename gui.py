@@ -6,6 +6,7 @@ import shutil
 from datetime import datetime
 import requests
 import openpyxl
+from cryptography.fernet import Fernet
 
 from i18n import TEXT
 from state import State
@@ -13,18 +14,38 @@ from gs1 import parse_gs1
 from duplicate import DuplicateChecker
 from errors import ErrorLog
 
+# Вспомогательные функции для обфускации строк
+def _d(h): return bytes.fromhex(h).decode()
+def _db(h): return bytes.fromhex(h)
+
 APP_NAME = "aggregation_LEONID"
-CONFIG_FILE = "config_local.json"
-ADMIN_PASSWORD = "28091987"
+CONFIG_FILE = "config_local.bin"
+
+# "28091987" в HEX
+ADMIN_PASSWORD_OBF = "3238303931393837"
+# CIPHER_KEY в HEX
+CIPHER_KEY_OBF = "47366c2d334c3672385f4e376a4d2d773976364c39782d763351365239542d763550364c39582d763351343d"
 
 LAYOUT_MAP = {
     'й': 'q', 'ц': 'w', 'у': 'e', 'к': 'r', 'е': 't', 'н': 'y', 'г': 'u', 'ш': 'i', 'щ': 'o', 'з': 'p', 'х': '[', 'ъ': ']',
     'ф': 'a', 'ы': 's', 'в': 'd', 'а': 'f', 'п': 'g', 'р': 'h', 'о': 'j', 'л': 'k', 'д': 'l', 'ж': ';', 'э': "'",
     'я': 'z', 'ч': 'x', 'с': 'c', 'м': 'v', 'и': 'b', 'т': 'n', 'ь': 'm', 'б': ',', 'ю': '.',
     'Й': 'Q', 'Ц': 'W', 'У': 'E', 'К': 'R', 'Е': 'T', 'Н': 'Y', 'Г': 'U', 'Ш': 'I', 'Щ': 'O', 'З': 'P', 'Х': '{', 'Ъ': '}',
-    'Ф': 'A', 'Ы': 'S', 'В': 'D', 'А': 'F', 'П': 'G', 'Р': 'H', 'О': 'J', 'Л': 'K', 'Д': 'L', 'Ж': ':', 'Э': '"',
+    'Ф': 'A', 'Ы': 'S', 'В': 'D', 'А': 'F', 'П': 'G', 'р': 'h', 'О': 'J', 'Л': 'K', 'Д': 'L', 'Ж': ':', 'Э': '"',
     'Я': 'Z', 'Ч': 'X', 'С': 'C', 'М': 'V', 'И': 'B', 'Т': 'N', 'Ь': 'M', 'Б': '<', 'Ю': '>'
 }
+
+# -------------------------------------------------
+# CONFIG ENCRYPTION
+# -------------------------------------------------
+
+def encrypt_data(data: str) -> bytes:
+    f = Fernet(_db(CIPHER_KEY_OBF))
+    return f.encrypt(data.encode('utf-8'))
+
+def decrypt_data(data: bytes) -> str:
+    f = Fernet(_db(CIPHER_KEY_OBF))
+    return f.decrypt(data).decode('utf-8')
 
 def load_config():
     defaults = {
@@ -35,19 +56,42 @@ def load_config():
         "tnved": "", "tnved_enabled": False,
         "ds_number": "", "ds_enabled": False,
         "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
-        "is_server": False
+        "is_server": False, "lockout_until": 0
     }
-    if not os.path.exists(CONFIG_FILE): save_config(defaults); return defaults
+
+    OLD_CONFIG = "config_local.json"
+    if os.path.exists(OLD_CONFIG):
+        try:
+            with open(OLD_CONFIG, "r", encoding="utf-8") as f:
+                old_cfg = json.load(f)
+                save_config(old_cfg)
+            os.remove(OLD_CONFIG)
+        except: pass
+
+    if not os.path.exists(CONFIG_FILE):
+        save_config(defaults)
+        return defaults
+
     try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            cfg = json.load(f);
+        with open(CONFIG_FILE, "rb") as f:
+            encrypted_data = f.read()
+            decrypted_data = decrypt_data(encrypted_data)
+            cfg = json.loads(decrypted_data)
             for k, v in defaults.items():
                 if k not in cfg: cfg[k] = v
             return cfg
-    except: return defaults
+    except:
+        return defaults
 
 def save_config(cfg):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+    try:
+        data_str = json.dumps(cfg, indent=2, ensure_ascii=False)
+        encrypted_data = encrypt_data(data_str)
+        with open(CONFIG_FILE, "wb") as f:
+            f.write(encrypted_data)
+    except: pass
+
+# -------------------------------------------------
 
 def days_passed(date_str):
     try: return (datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")).days
@@ -56,7 +100,8 @@ def days_passed(date_str):
 class App:
     def __init__(self):
         self.config = load_config()
-        # Лимит безопасности
+        self.password_attempts = 0
+
         if self.config.get("limit_enabled") and days_passed(self.config["first_run"]) >= 180:
             self.config["box_size"] = 1
 
@@ -98,12 +143,62 @@ class App:
     def set_language(self, lang): self.lang = lang; self.show_shift_form()
 
     def admin_login(self):
+        now = int(datetime.now().timestamp())
+        if self.config.get("lockout_until", 0) > now:
+            self.lockout_screen()
+            return
+
         win = tk.Toplevel(self.root); win.title("Вход"); win.geometry("320x180")
         tk.Label(win, text="Пароль").pack(pady=15); entry = tk.Entry(win, show="*"); entry.pack()
+
         def check():
-            if entry.get() == ADMIN_PASSWORD: win.destroy(); self.admin_panel()
-            else: messagebox.showerror("Ошибка", "Неверно")
+            if entry.get() == _d(ADMIN_PASSWORD_OBF):
+                self.password_attempts = 0
+                win.destroy()
+                self.admin_panel()
+            else:
+                self.password_attempts += 1
+                if self.password_attempts >= 3:
+                    win.destroy()
+                    self.lockout_screen()
+                else:
+                    messagebox.showerror("Ошибка", f"Неверный пароль. Осталось попыток: {3 - self.password_attempts}")
+
         tk.Button(win, text="Войти", command=check).pack(pady=20)
+
+    def lockout_screen(self):
+        now = int(datetime.now().timestamp())
+        if self.config.get("lockout_until", 0) <= now:
+            self.config["lockout_until"] = now + 600
+            save_config(self.config)
+
+        remaining = self.config["lockout_until"] - now
+
+        win = tk.Toplevel(self.root)
+        win.title("ДОСТУП ЗАБЛОКИРОВАН")
+        win.geometry("600x400")
+        win.resizable(False, False)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+        win.grab_set()
+
+        tk.Label(win, text="СЛИШКОМ МНОГО НЕВЕРНЫХ ПОПЫТОК", fg="red", font=("Arial", 16, "bold")).pack(pady=20)
+        tk.Label(win, text="Доступ заблокирован на 10 минут.", font=("Arial", 12)).pack(pady=10)
+        tk.Label(win, text="Свяжитесь с разработчиком:", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(win, text="Email: leonid15@ya.ru\nTelegram: @leonardo_rushighlife", font=("Arial", 14), justify="center").pack(pady=20)
+
+        lbl_timer = tk.Label(win, text="", font=("Arial", 12))
+        lbl_timer.pack(pady=10)
+
+        def update_timer():
+            nonlocal remaining
+            if remaining <= 0:
+                win.destroy()
+            else:
+                lbl_timer.config(text=f"Осталось: {remaining // 60:02d}:{remaining % 60:02d}")
+                remaining -= 1
+                win.after(1000, update_timer)
+
+        update_timer()
 
     def admin_panel(self):
         win = tk.Toplevel(self.root); win.title("Админ-панель"); win.geometry("600x720")
