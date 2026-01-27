@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 import requests
+import openpyxl
 
 from i18n import TEXT
 from state import State
@@ -428,8 +429,8 @@ class App:
         # Сохранение TXT (XML)
         generated_paths.extend(self.save_files_split(summary, base_name, "txt"))
 
-        # Сохранение CSV
-        generated_paths.extend(self.save_files_split(summary, base_name, "csv"))
+        # Сохранение Excel (XLSX)
+        generated_paths.extend(self.save_files_split(summary, base_name, "xlsx"))
 
         return generated_paths
 
@@ -444,11 +445,10 @@ class App:
             filename = f"output/{base_name}_{idx}.{extension}"
             if extension == "txt":
                 content = self.generate_xml_content(boxes)
-            else:
-                content = self.generate_csv_content(boxes)
-
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(content)
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(content)
+            elif extension == "xlsx":
+                self.generate_excel_file(boxes, filename)
             return filename
 
         for sscc, units in summary["data"]:
@@ -487,12 +487,14 @@ class App:
         xml += '</unit_pack>'
         return xml
 
-    def generate_csv_content(self, boxes):
-        lines = []
+    def generate_excel_file(self, boxes, filename):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # Только коды маркировки, один в строке, без криптохвоста
         for sscc, units in boxes:
             for u in units:
-                lines.append(u['clean'])
-        return "\n".join(lines) + "\n"
+                ws.append([u['clean']])
+        wb.save(filename)
 
     # -------------------------------------------------
     # TELEGRAM
@@ -519,7 +521,9 @@ class App:
             for path in files:
                 if os.path.exists(path):
                     with open(path, "rb") as f:
-                        requests.post(url_doc, data={"chat_id": chat_id}, files={"document": f}, timeout=10)
+                        # Фильтруем только нужные расширения
+                        if path.endswith((".txt", ".xlsx")):
+                            requests.post(url_doc, data={"chat_id": chat_id}, files={"document": f}, timeout=10)
         except Exception as e:
             print(f"Telegram error: {e}")
 
