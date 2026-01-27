@@ -133,12 +133,31 @@ class App:
 
     def show_shift_form(self):
         self.clear(); t = TEXT[self.lang]; frame = tk.Frame(self.root); frame.pack(expand=True)
-        self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y")); self.entry_date.pack(pady=5)
-        tk.Label(frame, text=t["date"]).pack(); self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14)); self.entry_wp.pack(pady=5)
-        tk.Label(frame, text=t["workplace"]).pack(); self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14)); self.entry_name.pack(pady=5)
-        tk.Label(frame, text=t["name"]).pack(); tk.Button(frame, text=t["start"], font=("Arial", 16), command=self.start_shift).pack(pady=30)
+        # Центрирование текста в полях ввода через justify="center"
+        self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center")
+        self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y"))
+        self.entry_date.pack(pady=5)
+        tk.Label(frame, text=t["date"]).pack()
+
+        # Валидация для рабочего места (только цифры)
+        vcmd = (self.root.register(self.validate_digits), '%P')
+        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd)
+        self.entry_wp.pack(pady=5)
+        tk.Label(frame, text=t["workplace"]).pack()
+
+        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center")
+        self.entry_name.pack(pady=5)
+        tk.Label(frame, text=t["name"]).pack()
+
+        tk.Button(frame, text=t["start"], font=("Arial", 16), command=self.start_shift).pack(pady=30)
+
+    def validate_digits(self, P):
+        if P == "" or P.isdigit(): return True
+        return False
 
     def start_shift(self):
+        if not self.entry_date.get() or not self.entry_wp.get() or not self.entry_name.get():
+            messagebox.showerror("Ошибка", "Заполните все поля"); return
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
         self.state.reset(self.config["box_size"]); self.show_scan_screen()
 
@@ -185,31 +204,59 @@ class App:
     def perform_save(self):
         summary = self.state.get_shift_summary()
         if not summary["data"]: return []
-        ts = summary["start_time"].strftime("%Y%m%d_%H%M%S"); os.makedirs("output", exist_ok=True)
-        base = f"output/смена_{self.shift_info['workplace']}_{ts}"
-        with open(f"{base}.txt", "w", encoding="utf-8") as f: f.write(self.generate_xml_content(summary["data"]))
-        self.generate_excel_production(summary["data"], f"{base}.xlsx"); return [f"{base}.txt", f"{base}.xlsx"]
+        ts = datetime.now().strftime("%H%M%S")
+        date_str = self.shift_info['date'].replace('.', '_')
+        op_name = self.shift_info['name'].replace(' ', '_')
+
+        os.makedirs("output", exist_ok=True)
+
+        # Названия файлов по новому формату
+        agg_base = f"output/агрегация_{date_str}_{op_name}_{ts}"
+        prod_base = f"output/нанесение_{date_str}_{op_name}_{ts}"
+
+        # 1. Агрегация TXT (XML)
+        txt_path = f"{agg_base}.txt"
+        with open(txt_path, "w", encoding="utf-8") as f: f.write(self.generate_xml_content(summary["data"]))
+
+        # 2. Агрегация Excel (AGGREGATE / ITEM)
+        agg_xls_path = f"{agg_base}.xlsx"
+        self.generate_excel_aggregation(summary["data"], agg_xls_path)
+
+        # 3. Нанесение Excel
+        prod_xls_path = f"{prod_base}.xlsx"
+        self.generate_excel_production(summary["data"], prod_xls_path)
+
+        return [txt_path, agg_xls_path, prod_xls_path]
 
     def generate_xml_content(self, boxes):
-        xml = '<?xml version="1.0" encoding="UTF-8"?>\n<unit_pack>\n'
+        xml = '<?xml version="1.0" encoding="UTF-8"?>\n<unit_pack>\n<Document>\n'
+        xml += f'<organisation><id_info><LP_info LP_TIN="{self.config["lp_tin"]}" /></id_info></organisation>\n'
         for sscc, units in boxes:
             xml += f'<pack_content><pack_code>{sscc}</pack_code>\n'
             for u in units: xml += f'<cis>{u["clean"]}</cis>\n'
             xml += '</pack_content>\n'
-        return xml + '</unit_pack>'
+        return xml + '</Document>\n</unit_pack>'
+
+    def generate_excel_aggregation(self, boxes, filename):
+        wb = openpyxl.Workbook(); ws = wb.active; ws.append(["AGGREGATE", "ITEM"])
+        for sscc, units in boxes:
+            for u in units: ws.append([sscc, u['clean']])
+        wb.save(filename)
 
     def generate_excel_production(self, boxes, filename):
         wb = openpyxl.Workbook(); ws = wb.active
-        ws.append(["Продукт", "КМ", "GTIN", "ТН ВЭД", "ДС", "Дата"])
+        ws.append(["Название продукта", "Код маркировки", "GTIN", "ТН ВЭД", "Декларация", "Номер ДС", "Дата производства"])
         for sscc, units in boxes:
             for u in units:
-                ws.append([self.config["product_name"] if self.config["product_enabled"] else "", u["clean"], u["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", self.config["ds_number"], self.shift_info["date"]])
+                ws.append([self.config["product_name"] if self.config["product_enabled"] else "", u["clean"], u["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", "Декларация", self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
         wb.save(filename)
 
     def send_to_telegram(self, files):
         t, c = self.config.get("tg_token"), self.config.get("tg_chat_id")
         if t and c:
             try:
+                msg = f"Смена завершена.\nОператор: {self.shift_info['name']}\nДата: {self.shift_info['date']}"
+                requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
                 for p in files:
                     with open(p, "rb") as f: requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
             except: pass
