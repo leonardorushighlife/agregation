@@ -1,0 +1,3 @@
+APP_NAME = "aggregation_LEONID"
+BOX_SIZE = 24
+DATE_CHECK_EVERY = 50
