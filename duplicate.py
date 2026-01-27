@@ -6,11 +6,11 @@ import threading
 import time
 
 class DuplicateChecker:
-    def __init__(self, db_path="data/duplicates.db", is_server=False, access_key=""):
+    def __init__(self, db_path="data/duplicates.db", is_server=False, access_key="", server_ip=None):
         self.db_path = db_path
         self.is_server = is_server
         self.access_key = access_key
-        self.server_ip = None
+        self.server_ip = server_ip if server_ip and server_ip.strip() else None
         self.port = 5555
         self.udp_port = 5556
         self.running = True
@@ -22,13 +22,32 @@ class DuplicateChecker:
 
         if self.is_server:
             self.start_server_thread()
-        else:
+        elif not self.server_ip:
             self.start_discovery_thread()
 
     def _init_db(self):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS seen_codes (code TEXT PRIMARY KEY, scan_time DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS seen_codes (
+                    code TEXT PRIMARY KEY,
+                    scan_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    operator TEXT,
+                    workplace TEXT,
+                    sscc TEXT
+                )
+            """)
+            # Миграция для старых баз
+            try:
+                cursor.execute("ALTER TABLE seen_codes ADD COLUMN operator TEXT")
+            except: pass
+            try:
+                cursor.execute("ALTER TABLE seen_codes ADD COLUMN workplace TEXT")
+            except: pass
+            try:
+                cursor.execute("ALTER TABLE seen_codes ADD COLUMN sscc TEXT")
+            except: pass
+
             cursor.execute("CREATE TABLE IF NOT EXISTS seen_sscc (code TEXT PRIMARY KEY, scan_time DATETIME DEFAULT CURRENT_TIMESTAMP)")
             cursor.execute("CREATE TABLE IF NOT EXISTS recovery_shift (id INTEGER PRIMARY KEY AUTOINCREMENT, sscc TEXT, units_json TEXT, shift_info TEXT)")
             conn.commit()
@@ -50,7 +69,7 @@ class DuplicateChecker:
                     conn, addr = s.accept()
                     with conn:
                         try:
-                            data = conn.recv(2048).decode('utf-8')
+                            data = conn.recv(4096).decode('utf-8')
                             if not data: continue
                             req = json.loads(data)
 
@@ -100,25 +119,29 @@ class DuplicateChecker:
     def _handle_network_request(self, req):
         try:
             if req['type'] == 'check_unit':
-                self.check_local(req['code'])
+                self.check_local(req['code'], req.get('operator'), req.get('workplace'))
             elif req['type'] == 'check_sscc':
                 self.check_sscc_local(req['code'])
+            elif req['type'] == 'update_sscc':
+                self.update_sscc_local(req['codes'], req['sscc'])
             return {"status": "ok"}
         except Exception as e:
+            if isinstance(e, ValueError) and str(e).startswith("DUPLICATE|"):
+                return {"status": "duplicate", "details": str(e)}
             return {"status": "error", "message": str(e)}
 
     def network_request(self, req):
         if not self.server_ip:
             return {"status": "local_only"}
 
-        req['key'] = self.access_key # Добавляем ключ в запрос
+        req['key'] = self.access_key
 
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(3)
                 s.connect((self.server_ip, self.port))
                 s.sendall(json.dumps(req).encode('utf-8'))
-                response = s.recv(2048).decode('utf-8')
+                response = s.recv(4096).decode('utf-8')
                 return json.loads(response)
         except Exception as e:
             print(f"Network request failed: {e}")
@@ -126,22 +149,33 @@ class DuplicateChecker:
 
     # --- ПРОВЕРКИ ---
 
-    def check(self, code):
+    def check(self, code, operator=None, workplace=None):
         if self.is_server:
-            self.check_local(code)
+            self.check_local(code, operator, workplace)
         else:
-            # Сначала сетевая проверка
-            res = self.network_request({"type": "check_unit", "code": code})
-            if res.get("status") == "error":
+            res = self.network_request({
+                "type": "check_unit",
+                "code": code,
+                "operator": operator,
+                "workplace": workplace
+            })
+            if res.get("status") == "duplicate":
+                raise ValueError(res["details"])
+            elif res.get("status") == "error":
                 raise ValueError(res["message"])
-            self.check_local(code) # И локально тоже запишем
+            self.check_local(code, operator, workplace)
 
-    def check_local(self, code):
+    def check_local(self, code, operator=None, workplace=None):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT code FROM seen_codes WHERE code = ?", (code,))
-            if cursor.fetchone(): raise ValueError("Код уже был отсканирован (Дубликат)")
-            cursor.execute("INSERT INTO seen_codes (code) VALUES (?)", (code,))
+            cursor.execute("SELECT operator, workplace, sscc FROM seen_codes WHERE code = ?", (code,))
+            row = cursor.fetchone()
+            if row:
+                op, wp, sscc = row
+                raise ValueError(f"DUPLICATE|{op or ''}|{wp or ''}|{sscc or ''}")
+
+            cursor.execute("INSERT INTO seen_codes (code, operator, workplace) VALUES (?, ?, ?)",
+                           (code, operator, workplace))
             conn.commit()
 
     def check_sscc(self, code):
@@ -159,6 +193,21 @@ class DuplicateChecker:
             cursor.execute("SELECT code FROM seen_sscc WHERE code = ?", (code,))
             if cursor.fetchone(): raise ValueError("Этот SSCC уже использовался")
             cursor.execute("INSERT INTO seen_sscc (code) VALUES (?)", (code,))
+            conn.commit()
+
+    def update_sscc_for_units(self, codes, sscc):
+        """Связывает коды маркировки с SSCC кодом после закрытия коробки"""
+        if self.is_server:
+            self.update_sscc_local(codes, sscc)
+        else:
+            self.network_request({"type": "update_sscc", "codes": codes, "sscc": sscc})
+            self.update_sscc_local(codes, sscc)
+
+    def update_sscc_local(self, codes, sscc):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            for code in codes:
+                cursor.execute("UPDATE seen_codes SET sscc = ? WHERE code = ?", (sscc, code))
             conn.commit()
 
     # --- РЕЗЕРВИРОВАНИЕ ---

@@ -108,7 +108,8 @@ class App:
         self.duplicates = DuplicateChecker(
             self.config["db_path"],
             is_server=self.config.get("is_server", False),
-            access_key=self.config.get("access_key", "")
+            access_key=self.config.get("access_key", ""),
+            server_ip=self.config.get("server_ip", "")
         )
         self.state = State(self.config["box_size"])
         self.paused = False
@@ -263,6 +264,8 @@ class App:
         row += 1
         key_e = block("Сетевой ключ доступа", self.config["access_key"], None, row)
         row += 1
+        ip_e = block("IP сервера (ручной)", self.config.get("server_ip", ""), None, row)
+        row += 1
         tg_t = block("TG Bot Token", self.config["tg_token"], None, row)
         row += 1
         tg_c = block("TG Chat ID", self.config["tg_chat_id"], None, row)
@@ -282,7 +285,8 @@ class App:
                 "tg_token": tg_t.get(),
                 "tg_chat_id": tg_c.get(),
                 "is_server": srv_v.get(),
-                "access_key": key_e.get().strip()
+                "access_key": key_e.get().strip(),
+                "server_ip": ip_e.get().strip()
             })
             save_config(self.config)
             messagebox.showinfo("Успех", "Настройки сохранены. Перезапустите программу.")
@@ -364,6 +368,29 @@ class App:
             self.duplicates.clear_recovery()
             self.show_language_screen()
 
+    def handle_duplicate_error(self, err_msg, code):
+        parts = err_msg.split("|")
+        if len(parts) >= 4:
+            op, wp, sscc = parts[1], parts[2], parts[3]
+            msg = f"Код уже был отсканирован ранее!\n\n"
+            msg += f"Оператор: {op or 'Неизвестно'}\n"
+            msg += f"Рабочее место: {wp or 'Неизвестно'}\n"
+            if sscc:
+                msg += f"Коробка (SSCC): ...{sscc[-4:]}\n"
+
+            # Сохраняем в историю дубликатов для отчета
+            self.state.duplicates_list.append({
+                "code": code,
+                "operator": op,
+                "workplace": wp,
+                "sscc": sscc,
+                "time": datetime.now().strftime("%H:%M:%S")
+            })
+
+            messagebox.showerror("Дубликат обнаружен", msg)
+        else:
+            messagebox.showerror("Ошибка", err_msg)
+
     def on_scan(self, event):
         raw = self.sanitize_input(self.translate_layout(self.scan_entry.get().strip()))
         self.scan_entry.delete(0, tk.END)
@@ -379,6 +406,11 @@ class App:
             try:
                 self.duplicates.check_sscc(raw)
                 units = self.state.scan_sscc(raw)
+
+                # Привязываем юниты к SSCC в базе дубликатов
+                unit_codes = [u['clean'] for u in units]
+                self.duplicates.update_sscc_for_units(unit_codes, raw)
+
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
                 self.show_last(f"Коробка закрыта: {raw}")
                 self.update_info()
@@ -394,12 +426,23 @@ class App:
                 parsed = parse_gs1(raw)
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
                     raise Exception("Неверный GTIN")
-                self.duplicates.check(parsed["clean"])
+
+                # Передаем данные оператора для записи
+                self.duplicates.check(
+                    parsed["clean"],
+                    operator=self.shift_info['name'],
+                    workplace=self.shift_info['workplace']
+                )
+
                 self.state.scan_unit(parsed)
                 self.show_last(parsed["raw"])
                 self.update_info()
             except Exception as e:
-                messagebox.showerror("Ошибка GS1", str(e))
+                err_str = str(e)
+                if err_str.startswith("DUPLICATE|"):
+                    self.handle_duplicate_error(err_str, parsed["clean"])
+                else:
+                    messagebox.showerror("Ошибка GS1", err_str)
 
         self.scan_entry.focus_set()
 
@@ -418,13 +461,21 @@ class App:
         txt = f"{base}.txt"
         xls_a = f"{base}_агрегация.xlsx"
         xls_n = f"{base}_нанесение.xlsx"
+        txt_d = f"{base}_дубликаты.txt"
+
+        files = [txt, xls_a, xls_n]
 
         with open(txt, "w", encoding="utf-8") as f:
             f.write(self.generate_xml(summary["data"]))
 
         self.gen_xls_agg(summary["data"], xls_a)
         self.gen_xls_prod(summary["data"], xls_n)
-        return [txt, xls_a, xls_n]
+
+        if summary.get("duplicates"):
+            self.gen_txt_dups(summary["duplicates"], txt_d)
+            files.append(txt_d)
+
+        return files
 
     def generate_xml(self, boxes):
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n<unit_pack>\n'
@@ -461,6 +512,18 @@ class App:
                 ])
         wb.save(fn)
 
+    def gen_txt_dups(self, dups, fn):
+        with open(fn, "w", encoding="utf-8") as f:
+            f.write("ОТЧЕТ О ВЫЯВЛЕННЫХ ДУБЛИКАТАХ\n")
+            f.write("="*40 + "\n")
+            for d in dups:
+                f.write(f"Время: {d['time']}\n")
+                f.write(f"Код: {d['code']}\n")
+                f.write(f"Ранее отсканировал: {d['operator']} (Р.М. {d['workplace']})\n")
+                if d['sscc']:
+                    f.write(f"Находится в коробке: {d['sscc']}\n")
+                f.write("-" * 20 + "\n")
+
     def send_to_telegram(self, files):
         t = self.config.get("tg_token")
         c = self.config.get("tg_chat_id")
@@ -469,6 +532,9 @@ class App:
         try:
             sum_data = self.state.get_shift_summary()
             msg = f"👤 Оператор: {self.shift_info['name']}\n📦 Коробки: {sum_data['total_boxes']}\n🔢 Коды: {sum_data['total_codes']}"
+            if sum_data.get("duplicates"):
+                msg += f"\n🚫 Дубликатов: {len(sum_data['duplicates'])}"
+
             requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
             for p in files:
                 with open(p, "rb") as f:
