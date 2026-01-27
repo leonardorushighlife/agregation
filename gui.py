@@ -173,7 +173,7 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Панель администратора")
-        win.geometry("600x680")
+        win.geometry("600x720")
         win.resizable(False, False)
 
         def block(title, value, enabled, row):
@@ -246,7 +246,7 @@ class App:
 
             save_config(self.config)
             self.state.reset(val)
-            self.duplicates = DuplicateChecker(self.config["db_path"]) # Re-init DB
+            self.duplicates = DuplicateChecker(self.config["db_path"])
             messagebox.showinfo("Успех", "Настройки сохранены")
             win.destroy()
 
@@ -318,12 +318,10 @@ class App:
         )
         self.last.pack(pady=15)
 
-        # 🔑 hidden input for scanner
         self.scan_entry = tk.Entry(self.root)
         self.scan_entry.place(x=-100, y=-100)
         self.scan_entry.focus_set()
         self.scan_entry.bind("<Return>", self.on_scan)
-        # Prevent losing focus
         self.root.bind("<Button-1>", lambda e: self.scan_entry.focus_set())
 
         btn = tk.Frame(self.root)
@@ -379,26 +377,32 @@ class App:
         if not raw:
             return
 
-        # Перевод раскладки
         raw = self.translate_layout(raw)
 
         if self.state.wait_sscc:
-            # Валидация SSCC: должен начинаться с 00 и иметь 18-20 цифр
             if not raw.startswith("00") or not raw.isdigit() or len(raw) < 18:
                 err = "Неверный формат SSCC (должен начинаться с 00 и содержать 18-20 цифр)"
                 self.errors.add(raw, err)
                 messagebox.showerror(t["error"], err)
                 return
 
-            self.state.scan_sscc(raw)
-            self.show_last(f"SSCC: {raw}")
+            # Проверка дубликатов SSCC
+            try:
+                self.duplicates.check_sscc(raw)
+            except ValueError as e:
+                self.errors.add(raw, str(e))
+                messagebox.showerror(t["error"], str(e))
+                return
 
-            # Автосохранение каждые 30 коробок
+            self.state.scan_sscc(raw)
+            self.show_last(f"Коробка {self.state.box-1} закрыта: {raw}")
+
             self.boxes_since_save += 1
             if self.boxes_since_save >= 30:
                 self.perform_save()
                 self.boxes_since_save = 0
 
+            # Сразу обновляем экран для следующего короба
             self.update_info()
             return
 
@@ -434,10 +438,7 @@ class App:
         os.makedirs("output", exist_ok=True)
         generated_paths = []
 
-        # 1. Сохранение агрегации (TXT/XML и XLSX)
         generated_paths.extend(self.save_aggregation_reports(summary, timestamp))
-
-        # 2. Сохранение отчета о нанесении (XLSX)
         generated_paths.extend(self.save_production_reports(summary, timestamp))
 
         return generated_paths
@@ -451,15 +452,12 @@ class App:
         paths = []
 
         def write_part(boxes, idx):
-            # XML
             xml_fn = f"output/{base_name}_{idx}.txt"
             with open(xml_fn, "w", encoding="utf-8") as f:
                 f.write(self.generate_xml_content(boxes))
 
-            # Excel Агрегация
             xls_fn = f"output/{base_name}_{idx}.xlsx"
             self.generate_excel_aggregation(boxes, xls_fn)
-
             return [xml_fn, xls_fn]
 
         for sscc, units in summary["data"]:
@@ -468,13 +466,11 @@ class App:
                 file_idx += 1
                 current_boxes = []
                 current_codes_count = 0
-
             current_boxes.append((sscc, units))
             current_codes_count += len(units)
 
         if current_boxes:
             paths.extend(write_part(current_boxes, file_idx))
-
         return paths
 
     def save_production_reports(self, summary, timestamp):
@@ -496,13 +492,11 @@ class App:
                 file_idx += 1
                 current_boxes = []
                 current_codes_count = 0
-
             current_boxes.append((sscc, units))
             current_codes_count += len(units)
 
         if current_boxes:
             paths.append(write_part(current_boxes, file_idx))
-
         return paths
 
     def generate_xml_content(self, boxes):
@@ -514,14 +508,12 @@ class App:
         xml += f'                <LP_info LP_TIN="{self.config["lp_tin"]}" />\n'
         xml += '            </id_info>\n'
         xml += '        </organisation>\n\n'
-
         for sscc, units in boxes:
             xml += '        <pack_content>\n'
             xml += f'            <pack_code>{sscc}</pack_code>\n'
             for u in units:
                 xml += f'            <cis>{u["clean"]}</cis>\n'
             xml += '        </pack_content>\n\n'
-
         xml += '    </Document>\n'
         xml += '</unit_pack>'
         return xml
@@ -538,17 +530,20 @@ class App:
     def generate_excel_production(self, boxes, filename):
         wb = openpyxl.Workbook()
         ws = wb.active
-        # Поля: Название продукта, КМ, GTIN, GTIN, Декларация, Номер ДС, Дата производства
+
+        # Заголовки: A, B, C, D, E, F, G
+        ws.append(["Название продукта", "Код маркировки", "GTIN", "ТН ВЭД", "Декларация", "Номер ДС", "Дата производства"])
+
         for sscc, units in boxes:
             for u in units:
                 ws.append([
-                    self.config["product_name"],
-                    u["clean"],
-                    u["gtin"],
-                    u["gtin"],
-                    "Декларация",
-                    self.config["ds_number"],
-                    self.shift_info["date"]
+                    self.config["product_name"] if self.config["product_enabled"] else "", # A
+                    u["clean"],                                                            # B
+                    u["gtin"],                                                             # C
+                    self.config["tnved"] if self.config["tnved_enabled"] else "",          # D
+                    "Декларация",                                                          # E
+                    self.config["ds_number"] if self.config["ds_enabled"] else "",         # F
+                    self.shift_info["date"]                                                # G
                 ])
         wb.save(filename)
 
