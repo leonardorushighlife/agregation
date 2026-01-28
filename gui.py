@@ -98,6 +98,7 @@ class App:
     def __init__(self):
         self.config = load_config()
         self.password_attempts = 0
+        self.lang = "ru" # Дефолтный язык для системных сообщений до выбора
 
         if self.config.get("limit_enabled") and days_passed(self.config["first_run"]) >= 180:
             self.config["box_size"] = 1
