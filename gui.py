@@ -13,6 +13,7 @@ from state import State
 from gs1 import parse_gs1
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
+from licensing import check_license
 
 # Вспомогательные функции для обфускации строк
 def _d(h): return bytes.fromhex(h).decode()
@@ -57,7 +58,8 @@ def load_config():
         "ds_number": "", "ds_enabled": False,
         "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
         "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
-        "gs1_strict": True, "server_ip": ""
+        "gs1_strict": True, "server_ip": "",
+        "license_server": "http://127.0.0.1:8080"
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -97,6 +99,17 @@ class App:
         if self.config.get("limit_enabled") and days_passed(self.config["first_run"]) >= 180:
             self.config["box_size"] = 1
 
+        self.root = tk.Tk()
+        self.root.title(APP_NAME)
+        self.root.geometry("720x620")
+        self.root.resizable(False, False)
+
+        # Проверка лицензии и блокировки
+        allowed, msg = check_license(self.config.get("license_server"))
+        if not allowed:
+            self.show_blocked_screen(msg)
+            return
+
         self.duplicates = DuplicateChecker(
             self.config["db_path"],
             is_server=self.config.get("is_server", False),
@@ -105,10 +118,6 @@ class App:
         )
         self.state = State(self.config["box_size"])
         self.paused = False
-        self.root = tk.Tk()
-        self.root.title(APP_NAME)
-        self.root.geometry("720x620")
-        self.root.resizable(False, False)
 
         self.show_language_screen()
         self.check_recovery()
@@ -176,6 +185,14 @@ class App:
                     messagebox.showerror("Ошибка", f"Неверный пароль. Осталось попыток: {3 - self.password_attempts}")
 
         tk.Button(win, text="Войти", command=check).pack(pady=20)
+
+    def show_blocked_screen(self, msg):
+        self.clear()
+        tk.Label(self.root, text="ДОСТУП ЗАБЛОКИРОВАН", fg="red", font=("Arial", 20, "bold")).pack(pady=50)
+        tk.Label(self.root, text=msg, font=("Arial", 14), wraplength=600).pack(pady=20)
+        tk.Label(self.root, text="Для активации программы свяжитесь с разработчиком.", font=("Arial", 12)).pack(pady=30)
+        tk.Button(self.root, text="Выход", command=self.root.quit, width=20, height=2).pack(pady=20)
+        self.root.mainloop()
 
     def lockout_screen(self):
         now = int(datetime.now().timestamp())
@@ -273,6 +290,9 @@ class App:
         tg_c = block("TG Chat ID", self.config["tg_chat_id"], None, row)
 
         row += 1
+        lic_e = block("Сервер лицензий", self.config.get("license_server", ""), None, row)
+
+        row += 1
         tk.Button(win, text="🔍 Диагностика сканера", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
 
         def save():
@@ -292,7 +312,8 @@ class App:
                 "is_server": srv_v.get(),
                 "gs1_strict": gs1_v.get(),
                 "access_key": key_e.get().strip(),
-                "server_ip": ip_e.get().strip()
+                "server_ip": ip_e.get().strip(),
+                "license_server": lic_e.get().strip()
             })
             save_config(self.config)
             messagebox.showinfo("Успех", "Настройки сохранены. Перезапустите программу.")
