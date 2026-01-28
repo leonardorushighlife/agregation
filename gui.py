@@ -56,7 +56,8 @@ def load_config():
         "tnved": "", "tnved_enabled": False,
         "ds_number": "", "ds_enabled": False,
         "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
-        "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1"
+        "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
+        "gs1_strict": True
     }
 
     OLD_CONFIG = "config_local.json"
@@ -262,6 +263,10 @@ class App:
         srv_v = tk.BooleanVar(value=self.config.get("is_server", False))
         tk.Checkbutton(win, text="Использовать как сервер дубликатов", variable=srv_v).grid(row=row, column=1, sticky="w")
 
+        row += 1
+        gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True))
+        tk.Checkbutton(win, text="Строгая проверка GS1 (FNC1/GS)", variable=gs1_v).grid(row=row, column=1, sticky="w")
+
         if self.config.get("is_server"):
             row += 1
             cur_ip = get_local_ip()
@@ -294,6 +299,7 @@ class App:
                 "tg_token": tg_t.get(),
                 "tg_chat_id": tg_c.get(),
                 "is_server": srv_v.get(),
+                "gs1_strict": gs1_v.get(),
                 "access_key": key_e.get().strip(),
                 "server_ip": ip_e.get().strip()
             })
@@ -476,7 +482,7 @@ class App:
                  return
 
             try:
-                parsed = parse_gs1(raw)
+                parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
                     raise Exception("Неверный GTIN")
 
