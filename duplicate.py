@@ -15,6 +15,15 @@ class DuplicateChecker:
         self.udp_port = 5556
         self.running = True
 
+        # Для сервера: список подключенных клиентов {ip: last_seen_timestamp}
+        self.active_clients = {}
+        self._clients_lock = threading.Lock()
+
+        # Для клиента: статус подключения
+        self.is_connected = False
+        self._client_socket = None
+        self._socket_lock = threading.Lock()
+
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
@@ -22,8 +31,10 @@ class DuplicateChecker:
 
         if self.is_server:
             self.start_server_thread()
-        elif not self.server_ip:
+        else:
             self.start_discovery_thread()
+            # Поток для поддержания статуса подключения (heartbeat)
+            threading.Thread(target=self._connection_monitor, daemon=True).start()
 
     def _init_db(self):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
@@ -52,10 +63,9 @@ class DuplicateChecker:
             cursor.execute("CREATE TABLE IF NOT EXISTS recovery_shift (id INTEGER PRIMARY KEY AUTOINCREMENT, sscc TEXT, units_json TEXT, shift_info TEXT)")
             conn.commit()
 
-    # --- СЕТЕВАЯ ЛОГИКА ---
+    # --- СЕТЕВАЯ ЛОГИКА (СЕРВЕР) ---
 
     def start_server_thread(self):
-        """Запуск сервера для приема запросов от клиентов"""
         threading.Thread(target=self._run_tcp_server, daemon=True).start()
         threading.Thread(target=self._run_udp_broadcast_responder, daemon=True).start()
 
@@ -64,29 +74,36 @@ class DuplicateChecker:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind(('0.0.0.0', self.port))
-                s.listen()
+                s.listen(20) # Увеличиваем очередь прослушивания
                 while self.running:
                     conn, addr = s.accept()
-                    with conn:
-                        try:
-                            data = conn.recv(4096).decode('utf-8')
-                            if not data: continue
-                            req = json.loads(data)
+                    # Обновляем список активных клиентов
+                    with self._clients_lock:
+                        self.active_clients[addr[0]] = time.time()
 
-                            # Проверка ключа доступа
-                            if req.get('key') != self.access_key:
-                                res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ доступа к серверу"}
-                            else:
-                                res = self._handle_network_request(req)
-
-                            conn.sendall(json.dumps(res).encode('utf-8'))
-                        except Exception as e:
-                            print(f"Server error handling client: {e}")
+                    # Обработка в отдельном потоке для предотвращения задержек
+                    threading.Thread(target=self._handle_client_connection, args=(conn, addr), daemon=True).start()
             except Exception as e:
                 print(f"Could not start TCP server: {e}")
 
+    def _handle_client_connection(self, conn, addr):
+        with conn:
+            conn.settimeout(5)
+            try:
+                data = conn.recv(4096).decode('utf-8')
+                if not data: return
+                req = json.loads(data)
+
+                if req.get('key') != self.access_key:
+                    res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ"}
+                else:
+                    res = self._handle_network_request(req)
+
+                conn.sendall(json.dumps(res).encode('utf-8'))
+            except Exception as e:
+                print(f"Server error handling {addr}: {e}")
+
     def _run_udp_broadcast_responder(self):
-        """Отвечает клиентам, где находится сервер"""
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -98,8 +115,17 @@ class DuplicateChecker:
             except Exception as e:
                 print(f"Could not start UDP responder: {e}")
 
+    def get_active_clients(self):
+        """Возвращает список IP клиентов, активных за последние 30 секунд"""
+        now = time.time()
+        with self._clients_lock:
+            # Очистка старых
+            self.active_clients = {ip: t for ip, t in self.active_clients.items() if now - t < 30}
+            return list(self.active_clients.keys())
+
+    # --- СЕТЕВАЯ ЛОГИКА (КЛИЕНТ) ---
+
     def start_discovery_thread(self):
-        """Поиск сервера в сети"""
         threading.Thread(target=self._discover_server, daemon=True).start()
 
     def _discover_server(self):
@@ -116,9 +142,47 @@ class DuplicateChecker:
                 except:
                     time.sleep(3)
 
+    def _connection_monitor(self):
+        """Периодически проверяет связь с сервером (Heartbeat)"""
+        while self.running:
+            if self.server_ip:
+                res = self.network_request({"type": "ping"})
+                self.is_connected = (res.get("status") == "ok")
+            else:
+                self.is_connected = False
+            time.sleep(5)
+
+    def network_request(self, req):
+        if not self.server_ip:
+            return {"status": "local_only"}
+
+        req['key'] = self.access_key
+
+        # Для ускорения используем короткий таймаут на установку соединения
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2) # Таймаут 2 сек для предотвращения долгого ожидания
+                s.connect((self.server_ip, self.port))
+                s.sendall(json.dumps(req).encode('utf-8'))
+
+                # Получаем ответ
+                data = b""
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk: break
+                    data += chunk
+
+                return json.loads(data.decode('utf-8'))
+        except Exception as e:
+            return {"status": "error", "message": f"Нет связи с сервером ({e})"}
+
+    # --- ПРОВЕРКИ ---
+
     def _handle_network_request(self, req):
         try:
-            if req['type'] == 'check_unit':
+            if req['type'] == 'ping':
+                return {"status": "ok"}
+            elif req['type'] == 'check_unit':
                 self.check_local(req['code'], req.get('operator'), req.get('workplace'))
             elif req['type'] == 'check_sscc':
                 self.check_sscc_local(req['code'])
@@ -129,25 +193,6 @@ class DuplicateChecker:
             if isinstance(e, ValueError) and str(e).startswith("DUPLICATE|"):
                 return {"status": "duplicate", "details": str(e)}
             return {"status": "error", "message": str(e)}
-
-    def network_request(self, req):
-        if not self.server_ip:
-            return {"status": "local_only"}
-
-        req['key'] = self.access_key
-
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(3)
-                s.connect((self.server_ip, self.port))
-                s.sendall(json.dumps(req).encode('utf-8'))
-                response = s.recv(4096).decode('utf-8')
-                return json.loads(response)
-        except Exception as e:
-            print(f"Network request failed: {e}")
-            return {"status": "local_only"}
-
-    # --- ПРОВЕРКИ ---
 
     def check(self, code, operator=None, workplace=None):
         if self.is_server:
@@ -162,7 +207,11 @@ class DuplicateChecker:
             if res.get("status") == "duplicate":
                 raise ValueError(res["details"])
             elif res.get("status") == "error":
-                raise ValueError(res["message"])
+                # Если сервер недоступен, продолжаем работу локально (или выбрасываем ошибку по желанию)
+                # Пользователь жаловался на задержку, поэтому важно не зависать.
+                print(f"Server check skipped/failed: {res.get('message')}")
+
+            # В любом случае пишем в локальную БД для страховки
             self.check_local(code, operator, workplace)
 
     def check_local(self, code, operator=None, workplace=None):
@@ -184,7 +233,7 @@ class DuplicateChecker:
         else:
             res = self.network_request({"type": "check_sscc", "code": code})
             if res.get("status") == "error":
-                raise ValueError(res["message"])
+                print(f"Server SSCC check failed: {res.get('message')}")
             self.check_sscc_local(code)
 
     def check_sscc_local(self, code):
@@ -196,7 +245,6 @@ class DuplicateChecker:
             conn.commit()
 
     def update_sscc_for_units(self, codes, sscc):
-        """Связывает коды маркировки с SSCC кодом после закрытия коробки"""
         if self.is_server:
             self.update_sscc_local(codes, sscc)
         else:
@@ -232,10 +280,8 @@ class DuplicateChecker:
             conn.commit()
 
 def get_local_ip():
-    """Определяет локальный IP-адрес компьютера"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Не устанавливаем реальное соединение, просто узнаем адрес интерфейса
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()

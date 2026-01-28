@@ -57,17 +57,8 @@ def load_config():
         "ds_number": "", "ds_enabled": False,
         "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
         "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
-        "gs1_strict": True
+        "gs1_strict": True, "server_ip": ""
     }
-
-    OLD_CONFIG = "config_local.json"
-    if os.path.exists(OLD_CONFIG):
-        try:
-            with open(OLD_CONFIG, "r", encoding="utf-8") as f:
-                old_cfg = json.load(f)
-                save_config(old_cfg)
-            os.remove(OLD_CONFIG)
-        except: pass
 
     if not os.path.exists(CONFIG_FILE):
         save_config(defaults)
@@ -116,7 +107,7 @@ class App:
         self.paused = False
         self.root = tk.Tk()
         self.root.title(APP_NAME)
-        self.root.geometry("720x560")
+        self.root.geometry("720x620")
         self.root.resizable(False, False)
 
         self.show_language_screen()
@@ -140,12 +131,6 @@ class App:
     def clear(self):
         for w in self.root.winfo_children():
             w.destroy()
-
-    def translate_layout(self, text):
-        return "".join([LAYOUT_MAP.get(c, c) for c in text])
-
-    def sanitize_input(self, text):
-        return "".join([c for c in text if ord(c) < 128])
 
     def show_language_screen(self):
         self.clear()
@@ -229,7 +214,7 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Админ-панель")
-        win.geometry("600x820")
+        win.geometry("600x850")
 
         def block(title, val, enabled, row):
             tk.Label(win, text=title).grid(row=row, column=0, sticky="w", padx=10, pady=5)
@@ -272,6 +257,12 @@ class App:
             cur_ip = get_local_ip()
             tk.Label(win, text=f"IP этого компьютера: {cur_ip}", fg="blue", font=("Arial", 10, "bold")).grid(row=row, column=1, sticky="w")
 
+            row += 1
+            clients = self.duplicates.get_active_clients()
+            tk.Label(win, text=f"Активных клиентов: {len(clients)}", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=10)
+            if clients:
+                tk.Label(win, text=", ".join(clients), fg="gray").grid(row=row, column=1, sticky="w")
+
         row += 1
         key_e = block("Сетевой ключ доступа", self.config["access_key"], None, row)
         row += 1
@@ -313,33 +304,16 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Диагностика сканера")
         win.geometry("500x380")
-
-        tk.Label(win, text="Отсканируйте код для проверки скрытых символов", font=("Arial", 10, "bold")).pack(pady=10)
+        tk.Label(win, text="Отсканируйте код", font=("Arial", 10, "bold")).pack(pady=10)
         text_area = tk.Text(win, height=12, width=55)
         text_area.pack(padx=10, pady=10)
-
-        diag_entry = tk.Entry(win)
-        diag_entry.pack(pady=5)
-        diag_entry.focus_set()
-
+        diag_entry = tk.Entry(win); diag_entry.pack(pady=5); diag_entry.focus_set()
         def on_diag_scan(event):
-            raw = diag_entry.get()
-            diag_entry.delete(0, tk.END)
-
-            visual = ""
-            hex_view = ""
-            for char in raw:
-                code = ord(char)
-                if code == 29: visual += "{GS}"
-                elif code == 232: visual += "{FNC1}"
-                elif code < 32: visual += f"{{0x{code:02x}}}"
-                else: visual += char
-                hex_view += f"{code:02x} "
-
-            text_area.delete("1.0", tk.END)
-            text_area.insert(tk.END, f"Получено: {visual}\n\nHEX: {hex_view}\n\nДлина: {len(raw)}")
+            raw = diag_entry.get(); diag_entry.delete(0, tk.END)
+            vis = "".join(["{GS}" if ord(c)==29 else "{FNC1}" if ord(c)==232 else c if ord(c)>=32 else f"{{0x{ord(c):02x}}}" for c in raw])
+            hex_v = " ".join([f"{ord(c):02x}" for c in raw])
+            text_area.delete("1.0", tk.END); text_area.insert(tk.END, f"Получено: {vis}\n\nHEX: {hex_v}\n\nДлина: {len(raw)}")
             return "break"
-
         diag_entry.bind("<Return>", on_diag_scan)
 
     def show_shift_form(self):
@@ -347,297 +321,151 @@ class App:
         t = TEXT[self.lang]
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
-
-        self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center")
-        self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y"))
-        self.entry_date.pack(pady=5)
-
+        self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y")); self.entry_date.pack(pady=5)
         vcmd = (self.root.register(lambda P: P == "" or P.isdigit()), '%P')
-        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd)
-        self.entry_wp.pack(pady=5)
-        tk.Label(frame, text=t["workplace"]).pack()
-
-        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center")
-        self.entry_name.pack(pady=5)
-        tk.Label(frame, text=t["name"]).pack()
-
+        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd); self.entry_wp.pack(pady=5); tk.Label(frame, text=t["workplace"]).pack()
+        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5); tk.Label(frame, text=t["name"]).pack()
         tk.Button(frame, text=t["start"], font=("Arial", 16), width=26, height=2, command=self.start_shift).pack(pady=30)
 
     def start_shift(self):
         if not self.entry_date.get() or not self.entry_wp.get() or not self.entry_name.get():
-            messagebox.showerror("Ошибка", "Заполните все поля")
-            return
+            messagebox.showerror("Ошибка", "Заполните все поля"); return
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
-        self.state.reset(self.config["box_size"])
-        self.show_scan_screen()
+        self.state.reset(self.config["box_size"]); self.show_scan_screen()
 
     def show_scan_screen(self):
         self.clear()
-        t = TEXT[self.lang]
-
-        self.info = tk.Label(self.root, font=("Arial", 16), justify="center")
-        self.info.pack(pady=20)
-
+        self.info = tk.Label(self.root, font=("Arial", 16), justify="center"); self.info.pack(pady=20)
         if self.config.get("is_server"):
             tk.Label(self.root, text=f"IP сервера: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
-
-        self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center")
-        self.last.pack(pady=15)
-
-        self.scan_entry = tk.Entry(self.root)
-        self.scan_entry.place(x=-100, y=-100)
-        self.scan_entry.focus_set()
-        self.scan_entry.bind("<Return>", self.on_scan)
+        self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center"); self.last.pack(pady=15)
+        self.conn_lbl = tk.Label(self.root, text="", font=("Arial", 9)); self.conn_lbl.pack(side="bottom", pady=5)
+        self.scan_entry = tk.Entry(self.root); self.scan_entry.place(x=-100, y=-100); self.scan_entry.focus_set(); self.scan_entry.bind("<Return>", self.on_scan)
         self.root.bind("<Button-1>", lambda e: self.scan_entry.focus_set())
-
-        btn = tk.Frame(self.root)
-        btn.pack(side="bottom", pady=20)
-
+        btn = tk.Frame(self.root); btn.pack(side="bottom", pady=20)
         tk.Button(btn, text="Пауза", width=14, command=self.pause).grid(row=0, column=0, padx=10)
         tk.Button(btn, text="Отправить", width=14, command=self.save_now).grid(row=0, column=1, padx=10)
         tk.Button(btn, text="Завершить смену", width=16, command=self.end_shift).grid(row=0, column=2, padx=10)
+        self.update_info(); self.update_connection_status()
 
-        self.update_info()
+    def update_connection_status(self):
+        if not self.config.get("is_server"):
+            if self.duplicates.is_connected: self.conn_lbl.config(text="● Подключено к серверу", fg="green")
+            else: self.conn_lbl.config(text="○ Нет связи с сервером", fg="red")
+        if hasattr(self, "conn_lbl") and self.conn_lbl.winfo_exists():
+            self.root.after(5000, self.update_connection_status)
 
     def pause(self):
-        self.paused = True
-        messagebox.askokcancel("Пауза", "Продолжить?")
-        self.paused = False
-        self.scan_entry.focus_set()
+        self.paused = True; messagebox.askokcancel("Пауза", "Продолжить?"); self.paused = False; self.scan_entry.focus_set()
 
     def save_now(self):
-        self.perform_save()
-        messagebox.showinfo("Успех", "Сохранено")
+        self.perform_save(); messagebox.showinfo("Успех", "Сохранено")
 
     def end_shift(self):
-        if self.state.in_box != 0:
-            messagebox.showwarning("Ошибка", "Коробка не закрыта")
-            return
+        if self.state.in_box != 0: messagebox.showwarning("Ошибка", "Коробка не закрыта"); return
         if messagebox.askokcancel("Смена", "Завершить?"):
-            files = self.perform_save()
-            self.send_to_telegram(files)
-            self.duplicates.clear_recovery()
-            self.show_language_screen()
+            files = self.perform_save(); self.send_to_telegram(files); self.duplicates.clear_recovery(); self.show_language_screen()
 
     def handle_duplicate_error(self, err_msg, code):
         parts = err_msg.split("|")
         if len(parts) >= 4:
             op, wp, sscc = parts[1], parts[2], parts[3]
-            msg = f"Код уже был отсканирован ранее!\n\n"
-            msg += f"Оператор: {op or 'Неизвестно'}\n"
-            msg += f"Рабочее место: {wp or 'Неизвестно'}\n"
-            if sscc:
-                msg += f"Коробка (SSCC): ...{sscc[-4:]}\n"
-
-            # Сохраняем в историю дубликатов для отчета
-            self.state.duplicates_list.append({
-                "code": code,
-                "operator": op,
-                "workplace": wp,
-                "sscc": sscc,
-                "time": datetime.now().strftime("%H:%M:%S")
-            })
-
-            messagebox.showerror("Дубликат обнаружен", msg)
-        else:
-            messagebox.showerror("Ошибка", err_msg)
+            msg = f"Код уже был отсканирован ранее!\n\nОператор: {op or '?'}\nР.М.: {wp or '?'}\n"
+            if sscc: msg += f"Коробка: ...{sscc[-4:]}\n"
+            self.state.duplicates_list.append({"code": code, "operator": op, "workplace": wp, "sscc": sscc, "time": datetime.now().strftime("%H:%M:%S")})
+            messagebox.showerror("Дубликат", msg)
+        else: messagebox.showerror("Ошибка", err_msg)
 
     def on_scan(self, event):
-        raw = self.scan_entry.get().strip() # Не очищаем через sanitize_input для проверки спецсимволов
-        self.scan_entry.delete(0, tk.END)
-        if not raw:
-            return
-
-        # Переводим раскладку только для обычных символов, не трогая спецсимволы
-        processed_raw = ""
-        for c in raw:
-            if ord(c) >= 32: processed_raw += LAYOUT_MAP.get(c, c)
-            else: processed_raw += c
-
-        raw = processed_raw
-
+        raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
+        if not raw_input: return
+        raw = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
         if self.state.wait_sscc:
-            if not raw.startswith("00"):
-                messagebox.showerror("Ошибка", "Неверный код. Ожидается SSCC код (начинается с 00)")
-                self.scan_entry.focus_set()
-                return
-
+            if not raw.startswith("00"): messagebox.showerror("Ошибка", "Ожидается SSCC (00)"); return
             try:
-                self.duplicates.check_sscc(raw)
-                units = self.state.scan_sscc(raw)
-
-                # Привязываем юниты к SSCC в базе дубликатов (используем raw коды)
-                unit_codes = [u['raw'] for u in units]
-                self.duplicates.update_sscc_for_units(unit_codes, raw)
-
+                self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
+                self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
-                self.show_last(f"Коробка закрыта: {raw}")
-                self.update_info()
-            except Exception as e:
-                messagebox.showerror("Ошибка", str(e))
+                self.show_last(f"Закрыто: {raw}"); self.update_info()
+            except Exception as e: messagebox.showerror("Ошибка", str(e))
         else:
-            if raw.startswith("00") and len(raw) >= 18:
-                 messagebox.showwarning("Внимание", "Вы отсканировали SSCC код упаковки, но коробка еще не наполнена.")
-                 self.scan_entry.focus_set()
-                 return
-
+            if raw.startswith("00") and len(raw) >= 18: messagebox.showwarning("Внимание", "Коробка не полная!"); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
-                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
-                    raise Exception("Неверный GTIN")
-
-                # Проверка на дубликаты по ПОЛНОМУ коду (включая криптохвост)
-                self.duplicates.check(
-                    raw,
-                    operator=self.shift_info['name'],
-                    workplace=self.shift_info['workplace']
-                )
-
-                self.state.scan_unit(parsed)
-                self.show_last(parsed["raw"])
-                self.update_info()
+                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]: raise Exception("Неверный GTIN")
+                self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
+                self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
             except Exception as e:
-                err_str = str(e)
-                if err_str.startswith("DUPLICATE|"):
-                    self.handle_duplicate_error(err_str, raw)
-                else:
-                    messagebox.showerror("Ошибка GS1", err_str)
-
+                if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
+                else: messagebox.showerror("Ошибка GS1", str(e))
         self.scan_entry.focus_set()
 
     def perform_save(self):
         summary = self.state.get_shift_summary()
-        if not summary["data"]:
-            return []
-
-        ts = datetime.now().strftime("%H%M%S")
-        dt = self.shift_info['date'].replace('.', '_')
-        op = self.shift_info['name'].replace(' ', '_')
-
-        os.makedirs("output", exist_ok=True)
-        base = f"output/смена_{dt}_{op}_{ts}"
-
-        xls_a = f"{base}_агрегация.xlsx"
-        xls_n = f"{base}_нанесение.xlsx"
-        txt_d = f"{base}_дубликаты.txt"
-
-        files = [xls_a, xls_n]
-
-        # Разбивка по 30000 кодов в TXT (XML)
-        LIMIT = 30000
-        current_batch = []
-        count = 0
-        part = 1
-
+        if not summary["data"]: return []
+        ts = datetime.now().strftime("%H%M%S"); dt = self.shift_info['date'].replace('.', '_'); op = self.shift_info['name'].replace(' ', '_')
+        os.makedirs("output", exist_ok=True); base = f"output/смена_{dt}_{op}_{ts}"
+        xls_a = f"{base}_агрегация.xlsx"; xls_n = f"{base}_нанесение.xlsx"; txt_d = f"{base}_дубликаты.txt"
+        files = [xls_a, xls_n]; LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
-            box_len = len(box[1])
-            if count + box_len > LIMIT and current_batch:
-                fn = f"{base}_часть_{part}.txt"
-                with open(fn, "w", encoding="utf-8") as f:
-                    f.write(self.generate_xml(current_batch))
-                files.append(fn)
-                current_batch = []
-                count = 0
-                part += 1
-
-            current_batch.append(box)
-            count += box_len
-
-        if current_batch:
+            if count + len(box[1]) > LIMIT and current:
+                fn = f"{base}_часть_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
+            current.append(box); count += len(box[1])
+        if current:
             fn = f"{base}_часть_{part}.txt" if part > 1 else f"{base}.txt"
-            with open(fn, "w", encoding="utf-8") as f:
-                f.write(self.generate_xml(current_batch))
-            files.append(fn)
-
-        self.gen_xls_agg(summary["data"], xls_a)
-        self.gen_xls_prod(summary["data"], xls_n)
-
-        if summary.get("duplicates"):
-            self.gen_txt_dups(summary["duplicates"], txt_d)
-            files.append(txt_d)
-
+            open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
+        self.gen_xls_agg(summary["data"], xls_a); self.gen_xls_prod(summary["data"], xls_n)
+        if summary.get("duplicates"): self.gen_txt_dups(summary["duplicates"], txt_d); files.append(txt_d)
         return files
 
     def generate_xml(self, boxes):
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n<unit_pack>\n'
         for s, u in boxes:
             xml += f'<pack_content><pack_code>{s}</pack_code>\n'
-            for x in u:
-                xml += f'<cis>{x["clean"]}</cis>\n'
+            for x in u: xml += f'<cis>{x["clean"]}</cis>\n'
             xml += '</pack_content>\n'
         return xml + '</unit_pack>'
 
     def gen_xls_agg(self, boxes, fn):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.append(["AGGREGATE", "ITEM"])
+        wb = openpyxl.Workbook(); ws = wb.active; ws.append(["AGGREGATE", "ITEM"])
         for s, u in boxes:
-            for x in u:
-                ws.append([s, x['clean']])
+            for x in u: ws.append([s, x['clean']])
         wb.save(fn)
 
     def gen_xls_prod(self, boxes, fn):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.append(["Название продукта", "Код маркировки", "GTIN", "ТН ВЭД", "Декларация", "Номер ДС", "Дата"])
+        wb = openpyxl.Workbook(); ws = wb.active; ws.append(["Название продукта", "Код маркировки", "GTIN", "ТН ВЭД", "Декларация", "Номер ДС", "Дата"])
         for s, u in boxes:
-            for x in u:
-                ws.append([
-                    self.config["product_name"] if self.config["product_enabled"] else "",
-                    x["clean"],
-                    x["gtin"],
-                    self.config["tnved"] if self.config["tnved_enabled"] else "",
-                    "Декларация",
-                    self.config["ds_number"] if self.config["ds_enabled"] else "",
-                    self.shift_info["date"]
-                ])
+            for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", "Декларация", self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
         wb.save(fn)
 
     def gen_txt_dups(self, dups, fn):
         with open(fn, "w", encoding="utf-8") as f:
-            f.write("ОТЧЕТ О ВЫЯВЛЕННЫХ ДУБЛИКАТАХ\n")
-            f.write("="*40 + "\n")
-            for d in dups:
-                f.write(f"Время: {d['time']}\n")
-                f.write(f"Код: {d['code']}\n")
-                f.write(f"Ранее отсканировал: {d['operator']} (Р.М. {d['workplace']})\n")
-                if d['sscc']:
-                    f.write(f"Находится в коробке: {d['sscc']}\n")
-                f.write("-" * 20 + "\n")
+            f.write("ОТЧЕТ О ДУБЛИКАТАХ\n" + "="*20 + "\n")
+            for d in dups: f.write(f"Время: {d['time']}\nКод: {d['code']}\nРанее: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
 
     def send_to_telegram(self, files):
-        t = self.config.get("tg_token")
-        c = self.config.get("tg_chat_id")
-        if not t or not c:
-            return
+        t = self.config.get("tg_token"); c = self.config.get("tg_chat_id")
+        if not t or not c: return
         try:
             sum_data = self.state.get_shift_summary()
-            msg = f"👤 Оператор: {self.shift_info['name']}\n📦 Коробки: {sum_data['total_boxes']}\n🔢 Коды: {sum_data['total_codes']}"
-            if sum_data.get("duplicates"):
-                msg += f"\n🚫 Дубликатов: {len(sum_data['duplicates'])}"
-
+            dur = datetime.now() - self.state.shift_start_time
+            total_seconds = int(dur.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            time_str = f"{hours}ч {minutes}мин"
+            msg = f"👤 Оператор: {self.shift_info['name']}\n📦 Коробки: {sum_data['total_boxes']}\n🔢 Коды: {sum_data['total_codes']}\n🕒 Время: {time_str}"
+            if sum_data.get("duplicates"): msg += f"\n🚫 Дубликатов: {len(sum_data['duplicates'])}"
             requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
             for p in files:
-                with open(p, "rb") as f:
-                    requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
-        except:
-            pass
+                with open(p, "rb") as f: requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
+        except: pass
 
     def show_last(self, text):
-        self.last.config(state="normal")
-        self.last.delete(0, tk.END)
-        self.last.insert(0, text)
-        self.last.config(state="readonly")
+        self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
 
     def update_info(self):
-        if self.state.wait_sscc:
-            txt = "⚠️ ОЖИДАНИЕ SSCC КОДА"
-        else:
-            txt = f"Коробка: {self.state.box}\nСобрано: {self.state.in_box} / {self.state.box_size}"
+        txt = "⚠️ ОЖИДАНИЕ SSCC" if self.state.wait_sscc else f"Коробка: {self.state.box}\nСобрано: {self.state.in_box} / {self.state.box_size}"
         self.info.config(text=txt)
 
-def run():
-    App().root.mainloop()
-
-if __name__ == "__main__":
-    run()
+def run(): App().root.mainloop()
+if __name__ == "__main__": run()
