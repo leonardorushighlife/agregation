@@ -426,8 +426,8 @@ class App:
         if not summary["data"]: return []
         ts = datetime.now().strftime("%H%M%S"); dt = self.shift_info['date'].replace('.', '_'); op = self.shift_info['name'].replace(' ', '_')
         os.makedirs("output", exist_ok=True); base = f"output/смена_{dt}_{op}_{ts}"
-        xls_a = f"{base}_агрегация.xlsx"; xls_n = f"{base}_нанесение.xlsx"; txt_d = f"{base}_дубликаты.txt"
-        files = [xls_a, xls_n]; LIMIT = 30000; current = []; count = 0; part = 1
+        xls_a = f"{base}_агрегация.xlsx"; xls_n = f"{base}_нанесение.xlsx"; csv_n = f"{base}_нанесение.csv"; txt_d = f"{base}_дубликаты.txt"
+        files = [xls_a, xls_n, csv_n]; LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
             if count + len(box[1]) > LIMIT and current:
                 fn = f"{base}_часть_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
@@ -435,7 +435,7 @@ class App:
         if current:
             fn = f"{base}_часть_{part}.txt" if part > 1 else f"{base}.txt"
             open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
-        self.gen_xls_agg(summary["data"], xls_a); self.gen_xls_prod(summary["data"], xls_n)
+        self.gen_xls_agg(summary["data"], xls_a); self.gen_xls_prod(summary["data"], xls_n); self.gen_csv_prod(summary["data"], csv_n)
         if summary.get("duplicates"): self.gen_txt_dups(summary["duplicates"], txt_d); files.append(txt_d)
         return files
 
@@ -458,6 +458,12 @@ class App:
         for s, u in boxes:
             for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", "Декларация", self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
         wb.save(fn)
+
+    def gen_csv_prod(self, boxes, fn):
+        with open(fn, "w", encoding="utf-8") as f:
+            for s, u in boxes:
+                for x in u:
+                    f.write(f"{x['clean']}\n")
 
     def gen_txt_dups(self, dups, fn):
         with open(fn, "w", encoding="utf-8") as f:

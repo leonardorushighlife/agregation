@@ -8,24 +8,38 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("Пустой код")
 
-    data = raw
-    has_fnc1_start = False
+    # Проверка на запрещенные текстовые префиксы (согласно ТЗ)
+    if raw.startswith("FNC1") or raw.startswith("GS"):
+        raise GS1Error("Нарушение структуры GS1: Недопустимый текстовый префикс FNC1/GS.")
 
-    # 1. Поиск FNC1 в начале
+    data = raw
+    has_fnc1_physical = False
+
+    # 1. Поиск FNC1 в начале (физически: AIM ID или ASCII 232)
     for prefix in ["]d2", "]d1", "]E0"]:
         if data.startswith(prefix):
-            has_fnc1_start = True
+            has_fnc1_physical = True
             data = data[len(prefix):]
             break
 
-    if not has_fnc1_start:
-        if data.startswith(GS) or data.startswith(FNC1_CHAR):
-            has_fnc1_start = True
+    if not has_fnc1_physical:
+        if data.startswith(FNC1_CHAR):
+            has_fnc1_physical = True
+            data = data[1:]
+        elif data.startswith(GS):
+            # ТЗ: "НЕЛЬЗЯ чтобы первым символом был GS" (ASCII 29)
+            if strict:
+                raise GS1Error("Нарушение структуры GS1: Первым символом не может быть спецсимвол GS (ASCII 29).")
+            has_fnc1_physical = True
             data = data[1:]
 
-    # Если строгая проверка включена и FNC1 не найден
-    if strict and not has_fnc1_start:
-        raise GS1Error("Нарушение структуры GS1: Отсутствует символ FNC1 в начале кода. Настройте сканер или отключите проверку в настройках.")
+    # Логическое наличие FNC1 по структуре (если начинается с 01)
+    # ТЗ: "Наличие FNC1 в начале (логически, по структуре)"
+    has_fnc1_logical = has_fnc1_physical or data.startswith("01")
+
+    # Если строгая проверка включена и FNC1 не найден ни физически, ни логически
+    if strict and not has_fnc1_logical:
+        raise GS1Error("Нарушение структуры GS1: Отсутствует символ FNC1 в начале кода (физически или логически по AI 01).")
 
     # 2. Проверка AI 01
     if not data.startswith("01"):
@@ -61,6 +75,10 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     rest = rest[2:]
 
     # 4. Поиск разделителя GS перед AI 93
+    # Проверка на запрещенные текстовые разделители (согласно ТЗ)
+    if "GS" in rest or "FNC1" in rest:
+        raise GS1Error("Нарушение структуры GS1: Использование текстового 'GS' или 'FNC1' вместо спецсимвола.")
+
     # Проверяем ASCII 29, ASCII 232 и ПРОБЕЛ (частое поведение сканеров)
     gs_idx = -1
     for sep in [GS, FNC1_CHAR, " "]:
