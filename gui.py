@@ -3,6 +3,7 @@ from tkinter import messagebox
 import json
 import os
 import shutil
+import socket
 from datetime import datetime
 import requests
 import openpyxl
@@ -10,7 +11,7 @@ from cryptography.fernet import Fernet
 
 from i18n import TEXT
 from state import State
-from gs1 import parse_gs1
+from gs1 import parse_gs1, GS1Error
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
 from licensing import check_license, start_license_heartbeat
@@ -104,6 +105,9 @@ class App:
         self.root.geometry("720x620")
         self.root.resizable(False, False)
 
+        # Проверка интернета и лицензии
+        self.check_internet_connection()
+
         # Проверка лицензии и блокировки
         lic_srv = self.config.get("license_server")
         allowed, msg = check_license(lic_srv)
@@ -112,7 +116,7 @@ class App:
             return
 
         if lic_srv:
-            start_license_heartbeat(lic_srv)
+            start_license_heartbeat(lic_srv, on_blocked_callback=self.on_license_blocked)
 
         self.duplicates = DuplicateChecker(
             self.config["db_path"],
@@ -126,6 +130,14 @@ class App:
 
         self.show_language_screen()
         self.check_recovery()
+
+    def check_internet_connection(self):
+        try:
+            # Пытаемся подключиться к Google DNS или другому надежному хосту
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            self.has_internet = True
+        except OSError:
+            self.has_internet = False
 
     def check_recovery(self):
         t = TEXT[self.lang]
@@ -196,14 +208,23 @@ class App:
 
         tk.Button(win, text=t["login_btn"], command=check).pack(pady=20)
 
+    def on_license_blocked(self, msg):
+        # Вызывается из потока heartbeat
+        self.root.after(0, lambda: self.show_blocked_screen(msg))
+
     def show_blocked_screen(self, msg):
         t = TEXT[self.lang]
         self.clear()
+        # Отключаем все биндинги
+        self.root.unbind("<Button-1>")
+        try: self.scan_entry.destroy()
+        except: pass
+
         tk.Label(self.root, text=t["access_blocked_title"], fg="red", font=("Arial", 20, "bold")).pack(pady=50)
         tk.Label(self.root, text=msg, font=("Arial", 14), wraplength=600).pack(pady=20)
         tk.Label(self.root, text=t["contact_dev"], font=("Arial", 12)).pack(pady=30)
+        tk.Label(self.root, text="Email: leonid15@ya.ru\nTelegram: @leonardo_rushighlife", font=("Arial", 12)).pack(pady=10)
         tk.Button(self.root, text=t["exit_btn"], command=self.root.quit, width=20, height=2).pack(pady=20)
-        self.root.mainloop()
 
     def lockout_screen(self):
         t = TEXT[self.lang]
@@ -485,12 +506,19 @@ class App:
                 messagebox.showwarning(t["error"], t["warn_box_incomplete"]); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
-                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]: raise Exception(t["err_gtin"])
+                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
+                    raise Exception(t["err_gtin"])
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
+            except GS1Error as e:
+                err_key = str(e)
+                msg = t.get(err_key, err_key)
+                messagebox.showerror(t["error"], msg)
             except Exception as e:
-                if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
-                else: messagebox.showerror(t["error"], str(e))
+                if str(e).startswith("DUPLICATE|"):
+                    self.handle_duplicate_error(str(e), raw)
+                else:
+                    messagebox.showerror(t["error"], str(e))
 
     def on_scan_pallet(self, raw):
         t = TEXT[self.lang]

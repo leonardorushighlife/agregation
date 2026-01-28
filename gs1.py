@@ -6,11 +6,11 @@ class GS1Error(Exception):
 
 def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
-        raise GS1Error("Пустой код")
+        raise GS1Error("err_empty")
 
     # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
     if strict and (raw.startswith("FNC1") or raw.startswith("GS")):
-        raise GS1Error("Нарушение структуры GS1: Недопустимый текстовый префикс FNC1/GS.")
+        raise GS1Error("err_gs1_structure")
 
     data = raw
     has_fnc1_physical = False
@@ -29,7 +29,7 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         elif data.startswith(GS):
             # ТЗ: "НЕЛЬЗЯ чтобы первым символом был GS" (ASCII 29)
             if strict:
-                raise GS1Error("Нарушение структуры GS1: Первым символом не может быть спецсимвол GS (ASCII 29).")
+                raise GS1Error("err_gs1_structure")
             has_fnc1_physical = True
             data = data[1:]
 
@@ -39,14 +39,14 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     # Если строгая проверка включена и FNC1 не найден ни физически, ни логически
     if strict and not has_fnc1_logical:
-        raise GS1Error("Нарушение структуры GS1: Отсутствует символ FNC1 в начале кода (физически или логически по AI 01).")
+        raise GS1Error("err_gs1_fnc1")
 
     # 2. Проверка AI 01
     if not data.startswith("01"):
         # Если не начинается с 01, возможно FNC1 был в середине (ошибка сканера)
         # Но для Честного Знака 01 должен быть первым AI
         if strict:
-            raise GS1Error("Нарушение структуры GS1: Код должен начинаться с '01' (GTIN)")
+            raise GS1Error("err_gs1_structure")
 
     # Пытаемся найти 01 если оно не в начале (для нестрогого режима)
     if not data.startswith("01"):
@@ -54,10 +54,10 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         if idx_01 != -1:
             data = data[idx_01:]
         else:
-            raise GS1Error("Идентификатор AI 01 не найден")
+            raise GS1Error("err_gs1_gtin")
 
     if len(data) < 16:
-        raise GS1Error("Код слишком короткий")
+        raise GS1Error("err_gs1_structure")
 
     gtin = data[2:16]
     rest = data[16:]
@@ -65,19 +65,19 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     # 3. AI 21
     if not rest.startswith("21"):
         if strict:
-            raise GS1Error("Нарушение структуры: ожидался идентификатор '21' (серийный номер)")
+            raise GS1Error("err_gs1_21")
         idx_21 = rest.find("21")
         if idx_21 != -1:
             rest = rest[idx_21:]
         else:
-            raise GS1Error("Идентификатор AI 21 не найден")
+            raise GS1Error("err_gs1_21")
 
     rest = rest[2:]
 
     # 4. Поиск разделителя GS перед AI 93
     # Проверка на запрещенные текстовые разделители (только в строгом режиме)
     if strict and ("GS" in rest or "FNC1" in rest):
-        raise GS1Error("Нарушение структуры GS1: Использование текстового 'GS' или 'FNC1' вместо спецсимвола.")
+        raise GS1Error("err_gs1_structure")
 
     # Проверяем ASCII 29, ASCII 232 и ПРОБЕЛ (частое поведение сканеров)
     gs_idx = -1
@@ -99,19 +99,22 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         # Если разделителя нет, но есть 93
         if "93" in rest:
             if strict:
-                raise GS1Error("Нарушение структуры GS1: Отсутствует разделитель GS перед AI 93")
+                # В новом коде мы можем быть более лояльны к отсутствию GS перед 93
+                # если это разрешено настройкой, но ТЗ требует проверять ошибки.
+                # Оставим ошибку структуры если строго.
+                raise GS1Error("err_gs1_structure")
             idx_93 = rest.find("93")
             serial = rest[:idx_93]
             tail = rest[idx_93+2:]
         else:
             # Нет ни разделителя, ни 93
             if strict:
-                raise GS1Error("Нарушение структуры GS1: Отсутствует проверочный код (AI 93)")
+                raise GS1Error("err_gs1_structure")
             serial = rest
             tail = ""
 
     if not serial:
-        raise GS1Error("Серийный номер пуст")
+        raise GS1Error("err_gs1_21")
 
     clean = f"01{gtin}21{serial}"
 

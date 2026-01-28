@@ -88,6 +88,9 @@ class AdminDashboard:
         self.lang = "ru" # По умолчанию
         self.server_url = DEFAULT_SERVER_URL
         self.all_data = []
+        self.url_var = tk.StringVar(value=self.server_url)
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", lambda *args: self.filter_data())
 
         self.setup_ui()
         self.load_data()
@@ -124,12 +127,9 @@ class AdminDashboard:
         search_frame.pack(side="right", padx=20)
 
         tk.Label(search_frame, text=t.get("dash_server", "Server:"), fg="white", bg="#2c3e50").pack(side="left", padx=5)
-        self.url_var = tk.StringVar(value=self.server_url)
         tk.Entry(search_frame, textvariable=self.url_var, width=20).pack(side="left", padx=5)
 
         tk.Label(search_frame, text=t.get("dash_search", "Search:"), fg="white", bg="#2c3e50").pack(side="left", padx=5)
-        self.search_var = tk.StringVar()
-        self.search_var.trace("w", lambda *args: self.filter_data())
         tk.Entry(search_frame, textvariable=self.search_var, width=15, font=("Arial", 11)).pack(side="left", padx=5)
 
         # Информационная панель
