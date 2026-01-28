@@ -1,9 +1,10 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import json
 import os
 import shutil
 import socket
+import threading
 from datetime import datetime
 import requests
 import openpyxl
@@ -60,7 +61,8 @@ def load_config():
         "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
         "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
         "gs1_strict": True, "server_ip": "",
-        "license_server": "http://127.0.0.1:8080"
+        "license_server": "http://127.0.0.1:8080",
+        "com_enabled": False, "com_port": "", "com_baud": 9600
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -128,6 +130,7 @@ class App:
         self.agg_mode = "unit" # По умолчанию
         self.paused = False
 
+        self.start_serial_reader()
         self.show_language_screen()
         self.check_recovery()
 
@@ -261,11 +264,17 @@ class App:
 
         update_timer()
 
+    def get_ports(self):
+        try:
+            import serial.tools.list_ports
+            return [p.device for p in serial.tools.list_ports.comports()]
+        except: return []
+
     def admin_panel(self):
         t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
-        win.geometry("600x850")
+        win.geometry("600x950")
 
         def block(title, val, enabled, row):
             tk.Label(win, text=title).grid(row=row, column=0, sticky="w", padx=10, pady=5)
@@ -327,6 +336,20 @@ class App:
         lic_e = block("License Server", self.config.get("license_server", ""), None, row)
 
         row += 1
+        tk.Label(win, text="Scanner (USB COM)", font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        row += 1
+        com_v = tk.BooleanVar(value=self.config.get("com_enabled", False))
+        tk.Checkbutton(win, text=t["admin_com_enable"], variable=com_v).grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text=t["admin_com_port"]).grid(row=row, column=0, sticky="w", padx=10)
+        com_port_var = tk.StringVar(value=self.config.get("com_port", ""))
+        com_cb = ttk.Combobox(win, textvariable=com_port_var, values=self.get_ports(), width=27)
+        com_cb.grid(row=row, column=1)
+        tk.Button(win, text=t["admin_com_refresh"], command=lambda: com_cb.config(values=self.get_ports())).grid(row=row, column=2)
+        row += 1
+        baud_e = block(t["admin_com_baud"], self.config.get("com_baud", 9600), None, row)
+
+        row += 1
         tk.Button(win, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
 
         def save():
@@ -348,9 +371,14 @@ class App:
                 "gs1_strict": gs1_v.get(),
                 "access_key": key_e.get().strip(),
                 "server_ip": ip_e.get().strip(),
-                "license_server": lic_e.get().strip()
+                "license_server": lic_e.get().strip(),
+                "com_enabled": com_v.get(),
+                "com_port": com_port_var.get(),
+                "com_baud": int(baud_e.get())
             })
             save_config(self.config)
+            if self.config["com_enabled"]:
+                self.start_serial_reader()
             messagebox.showinfo(t["success"], t["settings_saved"])
             win.destroy()
 
@@ -479,16 +507,37 @@ class App:
             messagebox.showerror(t["dup_title"], msg)
         else: messagebox.showerror(t["error"], err_msg)
 
-    def on_scan(self, event):
-        raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
+    def process_barcode(self, raw_input):
         if not raw_input: return
         raw = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
-
         if self.state.mode == "pallet":
             self.on_scan_pallet(raw)
         else:
             self.on_scan_unit(raw)
+
+    def on_scan(self, event):
+        raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
+        self.process_barcode(raw_input)
         self.scan_entry.focus_set()
+
+    def start_serial_reader(self):
+        if not self.config.get("com_enabled"): return
+        port = self.config.get("com_port")
+        baud = self.config.get("com_baud", 9600)
+        if not port: return
+
+        def run_reader():
+            try:
+                import serial
+                with serial.Serial(port, baud, timeout=0.1) as ser:
+                    while self.config.get("com_enabled") and self.config.get("com_port") == port:
+                        line = ser.readline()
+                        if line:
+                            barcode = line.decode('utf-8', errors='ignore').strip()
+                            if barcode:
+                                self.root.after(0, lambda b=barcode: self.process_barcode(b))
+            except: pass
+        threading.Thread(target=run_reader, daemon=True).start()
 
     def on_scan_unit(self, raw):
         t = TEXT[self.lang]

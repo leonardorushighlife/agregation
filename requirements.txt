@@ -3,3 +3,4 @@ openpyxl
 cryptography
 flask
 kivy
+pyserial
