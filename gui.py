@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet
 from i18n import TEXT
 from state import State
 from gs1 import parse_gs1
-from duplicate import DuplicateChecker
+from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
 
 # Вспомогательные функции для обфускации строк
@@ -261,6 +261,12 @@ class App:
         row += 1
         srv_v = tk.BooleanVar(value=self.config.get("is_server", False))
         tk.Checkbutton(win, text="Использовать как сервер дубликатов", variable=srv_v).grid(row=row, column=1, sticky="w")
+
+        if self.config.get("is_server"):
+            row += 1
+            cur_ip = get_local_ip()
+            tk.Label(win, text=f"IP этого компьютера: {cur_ip}", fg="blue", font=("Arial", 10, "bold")).grid(row=row, column=1, sticky="w")
+
         row += 1
         key_e = block("Сетевой ключ доступа", self.config["access_key"], None, row)
         row += 1
@@ -407,8 +413,8 @@ class App:
                 self.duplicates.check_sscc(raw)
                 units = self.state.scan_sscc(raw)
 
-                # Привязываем юниты к SSCC в базе дубликатов
-                unit_codes = [u['clean'] for u in units]
+                # Привязываем юниты к SSCC в базе дубликатов (используем raw коды)
+                unit_codes = [u['raw'] for u in units]
                 self.duplicates.update_sscc_for_units(unit_codes, raw)
 
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
@@ -427,9 +433,9 @@ class App:
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
                     raise Exception("Неверный GTIN")
 
-                # Передаем данные оператора для записи
+                # Проверка на дубликаты по ПОЛНОМУ коду (включая криптохвост)
                 self.duplicates.check(
-                    parsed["clean"],
+                    raw,
                     operator=self.shift_info['name'],
                     workplace=self.shift_info['workplace']
                 )
@@ -440,7 +446,7 @@ class App:
             except Exception as e:
                 err_str = str(e)
                 if err_str.startswith("DUPLICATE|"):
-                    self.handle_duplicate_error(err_str, parsed["clean"])
+                    self.handle_duplicate_error(err_str, raw)
                 else:
                     messagebox.showerror("Ошибка GS1", err_str)
 

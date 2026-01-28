@@ -230,3 +230,15 @@ class DuplicateChecker:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM recovery_shift")
             conn.commit()
+
+def get_local_ip():
+    """Определяет локальный IP-адрес компьютера"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Не устанавливаем реальное соединение, просто узнаем адрес интерфейса
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
