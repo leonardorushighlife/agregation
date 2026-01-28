@@ -128,9 +128,10 @@ class App:
         self.check_recovery()
 
     def check_recovery(self):
+        t = TEXT[self.lang]
         data = self.duplicates.get_recovery_data()
         if data:
-            if messagebox.askyesno("Восстановление", "Найдена незавершенная смена. Продолжить?"):
+            if messagebox.askyesno(t["recovery_title"], t["recovery_msg"]):
                 recovered_boxes = []
                 last_info = None
                 for sscc, units_json, info_json in data:
@@ -148,11 +149,14 @@ class App:
 
     def show_language_screen(self):
         self.clear()
+        # Попытка определить текущий язык или оставить RU по умолчанию
+        lang = getattr(self, "lang", "ru")
+        t = TEXT.get(lang, TEXT["ru"])
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
 
         tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680, y=10, width=30, height=30)
-        tk.Label(frame, text="Выберите язык / Select language", font=("Arial", 18)).pack(pady=30)
+        tk.Label(frame, text=t["select_lang"], font=("Arial", 18)).pack(pady=30)
 
         for key in TEXT:
             tk.Button(frame, text=TEXT[key]["lang_name"], font=("Arial", 14), width=28, height=2,
@@ -163,16 +167,17 @@ class App:
         self.show_shift_form()
 
     def admin_login(self):
+        t = TEXT[self.lang]
         now = int(datetime.now().timestamp())
         if self.config.get("lockout_until", 0) > now:
             self.lockout_screen()
             return
 
         win = tk.Toplevel(self.root)
-        win.title("Вход")
+        win.title(t["login_title"])
         win.geometry("320x180")
 
-        tk.Label(win, text="Пароль").pack(pady=15)
+        tk.Label(win, text=t["password_label"]).pack(pady=15)
         entry = tk.Entry(win, show="*")
         entry.pack()
 
@@ -187,19 +192,21 @@ class App:
                     win.destroy()
                     self.lockout_screen()
                 else:
-                    messagebox.showerror("Ошибка", f"Неверный пароль. Осталось попыток: {3 - self.password_attempts}")
+                    messagebox.showerror(t["error"], t["err_wrong_pass"].format(3 - self.password_attempts))
 
-        tk.Button(win, text="Войти", command=check).pack(pady=20)
+        tk.Button(win, text=t["login_btn"], command=check).pack(pady=20)
 
     def show_blocked_screen(self, msg):
+        t = TEXT[self.lang]
         self.clear()
-        tk.Label(self.root, text="ДОСТУП ЗАБЛОКИРОВАН", fg="red", font=("Arial", 20, "bold")).pack(pady=50)
+        tk.Label(self.root, text=t["access_blocked_title"], fg="red", font=("Arial", 20, "bold")).pack(pady=50)
         tk.Label(self.root, text=msg, font=("Arial", 14), wraplength=600).pack(pady=20)
-        tk.Label(self.root, text="Для активации программы свяжитесь с разработчиком.", font=("Arial", 12)).pack(pady=30)
-        tk.Button(self.root, text="Выход", command=self.root.quit, width=20, height=2).pack(pady=20)
+        tk.Label(self.root, text=t["contact_dev"], font=("Arial", 12)).pack(pady=30)
+        tk.Button(self.root, text=t["exit_btn"], command=self.root.quit, width=20, height=2).pack(pady=20)
         self.root.mainloop()
 
     def lockout_screen(self):
+        t = TEXT[self.lang]
         now = int(datetime.now().timestamp())
         if self.config.get("lockout_until", 0) <= now:
             self.config["lockout_until"] = now + 600
@@ -208,15 +215,15 @@ class App:
         remaining = self.config["lockout_until"] - now
 
         win = tk.Toplevel(self.root)
-        win.title("ДОСТУП ЗАБЛОКИРОВАН")
+        win.title(t["access_blocked_title"])
         win.geometry("600x400")
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", lambda: None)
         win.grab_set()
 
-        tk.Label(win, text="СЛИШКОМ МНОГО НЕВЕРНЫХ ПОПЫТОК", fg="red", font=("Arial", 16, "bold")).pack(pady=20)
-        tk.Label(win, text="Доступ заблокирован на 10 минут.", font=("Arial", 12)).pack(pady=10)
-        tk.Label(win, text="Свяжитесь с разработчиком:", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Label(win, text=t["access_blocked_title"], fg="red", font=("Arial", 16, "bold")).pack(pady=20)
+        tk.Label(win, text=t["lockout_msg"], font=("Arial", 12)).pack(pady=10)
+        tk.Label(win, text=t["contact_dev"], font=("Arial", 12, "bold")).pack(pady=10)
         tk.Label(win, text="Email: leonid15@ya.ru\nTelegram: @leonardo_rushighlife", font=("Arial", 14), justify="center").pack(pady=20)
 
         lbl_timer = tk.Label(win, text="", font=("Arial", 12))
@@ -227,15 +234,16 @@ class App:
             if remaining <= 0:
                 win.destroy()
             else:
-                lbl_timer.config(text=f"Осталось: {remaining // 60:02d}:{remaining % 60:02d}")
+                lbl_timer.config(text=t["remaining_time"].format(f"{remaining // 60:02d}:{remaining % 60:02d}"))
                 remaining -= 1
                 win.after(1000, update_timer)
 
         update_timer()
 
     def admin_panel(self):
+        t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
-        win.title("Админ-панель")
+        win.title(t["admin_panel_title"])
         win.geometry("600x850")
 
         def block(title, val, enabled, row):
@@ -250,57 +258,58 @@ class App:
             return e
 
         row = 0
-        tk.Label(win, text="Основные настройки", font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        tk.Label(win, text=t["admin_main_settings"], font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
         row += 1
-        box_e = block("Размер короба", self.config["box_size"], None, row)
+        box_e = block(t["admin_box_size"], self.config["box_size"], None, row)
         row += 1
-        tin_e = block("ИНН (LP TIN)", self.config["lp_tin"], None, row)
+        tin_e = block(t["admin_tin"], self.config["lp_tin"], None, row)
         row += 1
-        gtin_e, gtin_v = block("GTIN товара", self.config["gtin"], self.config["gtin_enabled"], row)
+        gtin_e, gtin_v = block(t["admin_gtin"], self.config["gtin"], self.config["gtin_enabled"], row)
         row += 1
-        prod_e, prod_v = block("Название продукта", self.config["product_name"], self.config["product_enabled"], row)
+        prod_e, prod_v = block(t["admin_prod_name"], self.config["product_name"], self.config["product_enabled"], row)
         row += 1
-        tnved_e, tnved_v = block("ТН ВЭД", self.config["tnved"], self.config["tnved_enabled"], row)
+        tnved_e, tnved_v = block(t["admin_tnved"], self.config["tnved"], self.config["tnved_enabled"], row)
         row += 1
-        ds_e, ds_v = block("Номер ДС", self.config["ds_number"], self.config["ds_enabled"], row)
+        ds_e, ds_v = block(t["admin_ds"], self.config["ds_number"], self.config["ds_enabled"], row)
 
         row += 1
-        tk.Label(win, text="Сеть и Telegram", font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        tk.Label(win, text=t["admin_network_tg"], font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
         row += 1
         srv_v = tk.BooleanVar(value=self.config.get("is_server", False))
-        tk.Checkbutton(win, text="Использовать как сервер дубликатов", variable=srv_v).grid(row=row, column=1, sticky="w")
+        tk.Checkbutton(win, text=t["admin_use_srv"], variable=srv_v).grid(row=row, column=1, sticky="w")
 
         row += 1
         gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True))
-        tk.Checkbutton(win, text="Строгая проверка GS1 (FNC1/GS)", variable=gs1_v).grid(row=row, column=1, sticky="w")
+        tk.Checkbutton(win, text=t["admin_gs1_strict"], variable=gs1_v).grid(row=row, column=1, sticky="w")
 
         if self.config.get("is_server"):
             row += 1
             cur_ip = get_local_ip()
-            tk.Label(win, text=f"IP этого компьютера: {cur_ip}", fg="blue", font=("Arial", 10, "bold")).grid(row=row, column=1, sticky="w")
+            tk.Label(win, text=f"{t['admin_local_ip']}: {cur_ip}", fg="blue", font=("Arial", 10, "bold")).grid(row=row, column=1, sticky="w")
 
             row += 1
             clients = self.duplicates.get_active_clients()
-            tk.Label(win, text=f"Активных клиентов: {len(clients)}", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=10)
+            tk.Label(win, text=f"{t['active_clients_label']}: {len(clients)}", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=10)
             if clients:
                 tk.Label(win, text=", ".join(clients), fg="gray").grid(row=row, column=1, sticky="w")
 
         row += 1
-        key_e = block("Сетевой ключ доступа", self.config["access_key"], None, row)
+        key_e = block("Key", self.config["access_key"], None, row)
         row += 1
-        ip_e = block("IP сервера (ручной)", self.config.get("server_ip", ""), None, row)
+        ip_e = block("Server IP", self.config.get("server_ip", ""), None, row)
         row += 1
         tg_t = block("TG Bot Token", self.config["tg_token"], None, row)
         row += 1
         tg_c = block("TG Chat ID", self.config["tg_chat_id"], None, row)
 
         row += 1
-        lic_e = block("Сервер лицензий", self.config.get("license_server", ""), None, row)
+        lic_e = block("License Server", self.config.get("license_server", ""), None, row)
 
         row += 1
-        tk.Button(win, text="🔍 Диагностика сканера", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
+        tk.Button(win, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
 
         def save():
+            t = TEXT[self.lang]
             self.config.update({
                 "box_size": int(box_e.get()),
                 "lp_tin": tin_e.get(),
@@ -321,16 +330,17 @@ class App:
                 "license_server": lic_e.get().strip()
             })
             save_config(self.config)
-            messagebox.showinfo("Успех", "Настройки сохранены. Перезапустите программу.")
+            messagebox.showinfo(t["success"], t["settings_saved"])
             win.destroy()
 
-        tk.Button(win, text="Сохранить", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
+        tk.Button(win, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
 
     def scanner_diag(self):
+        t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
-        win.title("Диагностика сканера")
+        win.title(t["admin_scanner_diag"])
         win.geometry("500x380")
-        tk.Label(win, text="Отсканируйте код", font=("Arial", 10, "bold")).pack(pady=10)
+        tk.Label(win, text=t["admin_scan_code"], font=("Arial", 10, "bold")).pack(pady=10)
         text_area = tk.Text(win, height=12, width=55)
         text_area.pack(padx=10, pady=10)
         diag_entry = tk.Entry(win); diag_entry.pack(pady=5); diag_entry.focus_set()
@@ -338,7 +348,7 @@ class App:
             raw = diag_entry.get(); diag_entry.delete(0, tk.END)
             vis = "".join(["{GS}" if ord(c)==29 else "{FNC1}" if ord(c)==232 else c if ord(c)>=32 else f"{{0x{ord(c):02x}}}" for c in raw])
             hex_v = " ".join([f"{ord(c):02x}" for c in raw])
-            text_area.delete("1.0", tk.END); text_area.insert(tk.END, f"Получено: {vis}\n\nHEX: {hex_v}\n\nДлина: {len(raw)}")
+            text_area.delete("1.0", tk.END); text_area.insert(tk.END, f"{t['admin_received']}: {vis}\n\nHEX: {hex_v}\n\n{t['admin_length']}: {len(raw)}")
             return "break"
         diag_entry.bind("<Return>", on_diag_scan)
 
@@ -359,15 +369,15 @@ class App:
         self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
 
         # Выбор режима агрегации
-        tk.Label(frame, text="Режим агрегации:", font=("Arial", 10, "bold")).pack(pady=(10, 0))
+        tk.Label(frame, text=t["agg_mode_label"], font=("Arial", 10, "bold")).pack(pady=(10, 0))
         self.mode_var = tk.StringVar(value="unit")
         mode_frame = tk.Frame(frame)
         mode_frame.pack()
-        tk.Radiobutton(mode_frame, text="Короб (Юниты)", variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
-        tk.Radiobutton(mode_frame, text="Палета (Короба)", variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
+        tk.Radiobutton(mode_frame, text=t["mode_unit"], variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
+        tk.Radiobutton(mode_frame, text=t["mode_pallet"], variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
 
         self.pallet_size_frame = tk.Frame(frame)
-        tk.Label(self.pallet_size_frame, text="Коробок в палете:").pack(side="left")
+        tk.Label(self.pallet_size_frame, text=t["pallet_size_label"]).pack(side="left")
         self.entry_pallet_size = tk.Entry(self.pallet_size_frame, width=10, validate="key", validatecommand=vcmd)
         self.entry_pallet_size.insert(0, "10")
         self.entry_pallet_size.pack(side="left", padx=5)
@@ -383,8 +393,9 @@ class App:
             self.pallet_size_frame.pack_forget()
 
     def start_shift(self):
+        t = TEXT[self.lang]
         if not self.entry_date.get() or not self.entry_wp.get() or not self.entry_name.get():
-            messagebox.showerror("Ошибка", "Заполните все поля"); return
+            messagebox.showerror(t["error"], t["error_fill"]); return
 
         self.agg_mode = self.mode_var.get()
         size = int(self.config["box_size"])
@@ -392,54 +403,60 @@ class App:
             try:
                 size = int(self.entry_pallet_size.get())
             except:
-                messagebox.showerror("Ошибка", "Введите корректное количество коробок"); return
+                messagebox.showerror(t["error"], t["pallet_size_label"]); return
 
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
         self.state.reset(size, mode=self.agg_mode)
         self.show_scan_screen()
 
     def show_scan_screen(self):
+        t = TEXT[self.lang]
         self.clear()
         self.info = tk.Label(self.root, font=("Arial", 16), justify="center"); self.info.pack(pady=20)
         if self.config.get("is_server"):
-            tk.Label(self.root, text=f"IP сервера: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
+            tk.Label(self.root, text=f"{t['server_ip_label']}: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
         self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center"); self.last.pack(pady=15)
         self.conn_lbl = tk.Label(self.root, text="", font=("Arial", 9)); self.conn_lbl.pack(side="bottom", pady=5)
         self.scan_entry = tk.Entry(self.root); self.scan_entry.place(x=-100, y=-100); self.scan_entry.focus_set(); self.scan_entry.bind("<Return>", self.on_scan)
         self.root.bind("<Button-1>", lambda e: self.scan_entry.focus_set())
         btn = tk.Frame(self.root); btn.pack(side="bottom", pady=20)
-        tk.Button(btn, text="Пауза", width=14, command=self.pause).grid(row=0, column=0, padx=10)
-        tk.Button(btn, text="Отправить", width=14, command=self.save_now).grid(row=0, column=1, padx=10)
-        tk.Button(btn, text="Завершить смену", width=16, command=self.end_shift).grid(row=0, column=2, padx=10)
+        tk.Button(btn, text=t["pause"], width=14, command=self.pause).grid(row=0, column=0, padx=10)
+        tk.Button(btn, text=t["save"], width=14, command=self.save_now).grid(row=0, column=1, padx=10)
+        tk.Button(btn, text=t["end_shift"], width=16, command=self.end_shift).grid(row=0, column=2, padx=10)
         self.update_info(); self.update_connection_status()
 
     def update_connection_status(self):
+        t = TEXT[self.lang]
         if not self.config.get("is_server"):
-            if self.duplicates.is_connected: self.conn_lbl.config(text="● Подключено к серверу", fg="green")
-            else: self.conn_lbl.config(text="○ Нет связи с сервером", fg="red")
+            if self.duplicates.is_connected: self.conn_lbl.config(text=f"● {t['connected']}", fg="green")
+            else: self.conn_lbl.config(text=f"○ {t['disconnected']}", fg="red")
         if hasattr(self, "conn_lbl") and self.conn_lbl.winfo_exists():
             self.root.after(5000, self.update_connection_status)
 
     def pause(self):
-        self.paused = True; messagebox.askokcancel("Пауза", "Продолжить?"); self.paused = False; self.scan_entry.focus_set()
+        t = TEXT[self.lang]
+        self.paused = True; messagebox.askokcancel(t["pause"], t["resume"]); self.paused = False; self.scan_entry.focus_set()
 
     def save_now(self):
-        self.perform_save(); messagebox.showinfo("Успех", "Сохранено")
+        t = TEXT[self.lang]
+        self.perform_save(); messagebox.showinfo(t["success"], t["saved"])
 
     def end_shift(self):
-        if self.state.in_box != 0: messagebox.showwarning("Ошибка", "Коробка не закрыта"); return
-        if messagebox.askokcancel("Смена", "Завершить?"):
+        t = TEXT[self.lang]
+        if self.state.in_box != 0: messagebox.showwarning(t["error"], t["need_close_box"]); return
+        if messagebox.askokcancel(t["end_shift"], t["confirm_end"]):
             files = self.perform_save(); self.send_to_telegram(files); self.duplicates.clear_recovery(); self.show_language_screen()
 
     def handle_duplicate_error(self, err_msg, code):
+        t = TEXT[self.lang]
         parts = err_msg.split("|")
         if len(parts) >= 4:
             op, wp, sscc = parts[1], parts[2], parts[3]
-            msg = f"Код уже был отсканирован ранее!\n\nОператор: {op or '?'}\nР.М.: {wp or '?'}\n"
-            if sscc: msg += f"Коробка: ...{sscc[-4:]}\n"
+            msg = t["dup_details"].format(op or '?', wp or '?')
+            if sscc: msg += t["dup_box"].format(sscc[-4:])
             self.state.duplicates_list.append({"code": code, "operator": op, "workplace": wp, "sscc": sscc, "time": datetime.now().strftime("%H:%M:%S")})
-            messagebox.showerror("Дубликат", msg)
-        else: messagebox.showerror("Ошибка", err_msg)
+            messagebox.showerror(t["dup_title"], msg)
+        else: messagebox.showerror(t["error"], err_msg)
 
     def on_scan(self, event):
         raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
@@ -453,66 +470,69 @@ class App:
         self.scan_entry.focus_set()
 
     def on_scan_unit(self, raw):
+        t = TEXT[self.lang]
         if self.state.wait_sscc:
             if not raw.startswith("00"):
-                messagebox.showerror("Ошибка", "Ожидается код коробки (SSCC, начинается на 00)"); return
+                messagebox.showerror(t["error"], t["err_expect_box_prefix"]); return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
-                self.show_last(f"Закрыто (Короб): {raw}"); self.update_info()
-            except Exception as e: messagebox.showerror("Ошибка", str(e))
+                self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
+            except Exception as e: messagebox.showerror(t["error"], str(e))
         else:
             if raw.startswith("00") and len(raw) >= 18:
-                messagebox.showwarning("Внимание", "Коробка не полная!"); return
+                messagebox.showwarning(t["error"], t["warn_box_incomplete"]); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
-                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]: raise Exception("Неверный GTIN")
+                if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]: raise Exception(t["err_gtin"])
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
-                else: messagebox.showerror("Ошибка GS1", str(e))
+                else: messagebox.showerror(t["error"], str(e))
 
     def on_scan_pallet(self, raw):
+        t = TEXT[self.lang]
         if self.state.wait_sscc:
             # Ожидаем палетный код (001)
             if not raw.startswith("001"):
-                messagebox.showerror("Ошибка", "Ожидается код палеты (начинается на 001)"); return
+                messagebox.showerror(t["error"], t["err_expect_pallet_prefix"]); return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 # Для палет units - это список кодов коробок
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
-                self.show_last(f"Закрыто (Палета): {raw}"); self.update_info()
-            except Exception as e: messagebox.showerror("Ошибка", str(e))
+                self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
+            except Exception as e: messagebox.showerror(t["error"], str(e))
         else:
             # Ожидаем код коробки (000)
             if not raw.startswith("000"):
-                messagebox.showerror("Ошибка", "Ожидается код коробки (начинается на 000)"); return
+                messagebox.showerror(t["error"], t["err_expect_box_pallet_prefix"]); return
             try:
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 # В режиме палеты мы сохраняем код коробки как "юнит"
                 parsed = {"clean": raw, "raw": raw, "gtin": "BOX"}
                 self.state.scan_unit(parsed)
-                self.show_last(f"Добавлена коробка: {raw}"); self.update_info()
+                self.show_last(f"{t['added_box']}{raw}"); self.update_info()
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
-                else: messagebox.showerror("Ошибка", str(e))
+                else: messagebox.showerror(t["error"], str(e))
 
     def perform_save(self):
+        t = TEXT[self.lang]
         summary = self.state.get_shift_summary()
         if not summary["data"]: return []
         ts = datetime.now().strftime("%H%M%S"); dt = self.shift_info['date'].replace('.', '_'); op = self.shift_info['name'].replace(' ', '_')
-        os.makedirs("output", exist_ok=True); base = f"output/смена_{dt}_{op}_{ts}"
-        xls_a = f"{base}_агрегация.xlsx"; xls_n = f"{base}_нанесение.xlsx"; csv_n = f"{base}_нанесение.csv"; txt_d = f"{base}_дубликаты.txt"
+        os.makedirs("output", exist_ok=True); base = f"output/{t['fn_shift']}_{dt}_{op}_{ts}"
+        xls_a = f"{base}_{t['fn_agg']}.xlsx"; xls_n = f"{base}_{t['fn_prod']}.xlsx"; csv_n = f"{base}_{t['fn_prod']}.csv"; txt_d = f"{base}_{t['fn_dups']}.txt"
         files = [xls_a, xls_n, csv_n]; LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
             if count + len(box[1]) > LIMIT and current:
-                fn = f"{base}_часть_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
+                fn = f"{base}_{t['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
             current.append(box); count += len(box[1])
         if current:
-            fn = f"{base}_часть_{part}.txt" if part > 1 else f"{base}.txt"
+            fn = f"{base}_{t['fn_part']}_{part}.txt" if part > 1 else f"{base}.txt"
             open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
         self.gen_xls_agg(summary["data"], xls_a); self.gen_xls_prod(summary["data"], xls_n); self.gen_csv_prod(summary["data"], csv_n)
         if summary.get("duplicates"): self.gen_txt_dups(summary["duplicates"], txt_d); files.append(txt_d)
@@ -537,9 +557,11 @@ class App:
         wb.save(fn)
 
     def gen_xls_prod(self, boxes, fn):
-        wb = openpyxl.Workbook(); ws = wb.active; ws.append(["Название продукта", "Код маркировки", "GTIN", "ТН ВЭД", "Декларация", "Номер ДС", "Дата"])
+        t = TEXT[self.lang]
+        wb = openpyxl.Workbook(); ws = wb.active;
+        ws.append([t["xls_prod_name"], t["xls_code"], t["xls_gtin"], t["xls_tnved"], t["xls_decl"], t["xls_ds"], t["xls_date"]])
         for s, u in boxes:
-            for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", "Декларация", self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
+            for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", t["xls_decl"], self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
         wb.save(fn)
 
     def gen_csv_prod(self, boxes, fn):
@@ -549,11 +571,13 @@ class App:
                     f.write(f"{x['clean']}\n")
 
     def gen_txt_dups(self, dups, fn):
+        t = TEXT[self.lang]
         with open(fn, "w", encoding="utf-8") as f:
-            f.write("ОТЧЕТ О ДУБЛИКАТАХ\n" + "="*20 + "\n")
-            for d in dups: f.write(f"Время: {d['time']}\nКод: {d['code']}\nРанее: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
+            f.write(f"{t['report_dup']}\n" + "="*20 + "\n")
+            for d in dups: f.write(f"{t['report_time']}: {d['time']}\n{t['report_code']}: {d['code']}\n{t['report_prev']}: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
 
     def send_to_telegram(self, files):
+        tk_l = TEXT[self.lang]
         t = self.config.get("tg_token"); c = self.config.get("tg_chat_id")
         if not t or not c: return
         try:
@@ -562,9 +586,9 @@ class App:
             total_seconds = int(dur.total_seconds())
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
-            time_str = f"{hours}ч {minutes}мин"
-            msg = f"👤 Оператор: {self.shift_info['name']}\n📦 Коробки: {sum_data['total_boxes']}\n🔢 Коды: {sum_data['total_codes']}\n🕒 Время: {time_str}"
-            if sum_data.get("duplicates"): msg += f"\n🚫 Дубликатов: {len(sum_data['duplicates'])}"
+            time_str = f"{hours}h {minutes}m"
+            msg = f"👤 {tk_l['tg_op']}: {self.shift_info['name']}\n📦 {tk_l['tg_boxes']}: {sum_data['total_boxes']}\n🔢 {tk_l['tg_codes']}: {sum_data['total_codes']}\n🕒 {tk_l['tg_time']}: {time_str}"
+            if sum_data.get("duplicates"): msg += f"\n🚫 {tk_l['tg_dups']}: {len(sum_data['duplicates'])}"
             requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
             for p in files:
                 with open(p, "rb") as f: requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
@@ -574,11 +598,12 @@ class App:
         self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
 
     def update_info(self):
+        t = TEXT[self.lang]
         if self.state.wait_sscc:
-            txt = "⚠️ ОЖИДАНИЕ ПАЛЕТЫ (001)" if self.state.mode == "pallet" else "⚠️ ОЖИДАНИЕ КОРОБКИ (00)"
+            txt = t["wait_sscc_pallet"] if self.state.mode == "pallet" else t["wait_sscc_box"]
         else:
-            label = "Палета" if self.state.mode == "pallet" else "Коробка"
-            sub_label = "Коробок" if self.state.mode == "pallet" else "Собрано"
+            label = t["pallet"] if self.state.mode == "pallet" else t["box"]
+            sub_label = t["boxes_count"] if self.state.mode == "pallet" else t["collected"]
             txt = f"{label}: {self.state.box}\n{sub_label}: {self.state.in_box} / {self.state.box_size}"
         self.info.config(text=txt)
 

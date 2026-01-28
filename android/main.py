@@ -15,10 +15,17 @@ from kivy.utils import platform
 # Импортируем логику из основного проекта
 # В реальности нужно убедиться, что файлы gs1.py и state.py скопированы в папку приложения
 from gs1 import parse_gs1, GS1Error
+try:
+    from i18n import TEXT
+except:
+    TEXT = {"ru": {"error": "Error", "count": "Collected"}}
 
 class MobileAggregatorApp(App):
     def build(self):
-        self.title = "ЧЗ Агрегация (Android)"
+        self.lang = "ru"
+        t = TEXT.get(self.lang, TEXT["ru"])
+
+        self.title = f"{t.get('agg_mode_label', 'Aggregation')} (Android)"
         self.box_size = 24
         self.in_box = 0
         self.wait_sscc = False
@@ -27,8 +34,16 @@ class MobileAggregatorApp(App):
         # Главный контейнер
         self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
 
+        # Кнопки выбора языка
+        lang_layout = BoxLayout(size_hint_y=0.1, spacing=5)
+        for l_code in TEXT:
+            btn = Button(text=l_code.upper())
+            btn.bind(on_press=lambda inst, c=l_code: self.change_lang(c))
+            lang_layout.add_widget(btn)
+        self.layout.add_widget(lang_layout)
+
         # Информационная панель
-        self.info_label = Label(text="Начните сканирование", font_size='20sp', size_hint_y=0.2)
+        self.info_label = Label(text=t.get("precheck", "Start"), font_size='16sp', size_hint_y=0.2)
         self.layout.add_widget(self.info_label)
 
         # Поле ввода (для внешних сканеров и клавиатуры)
@@ -41,13 +56,13 @@ class MobileAggregatorApp(App):
         self.layout.add_widget(self.last_codes_label)
 
         # Кнопки управления
-        btn_layout = BoxLayout(size_hint_y=0.3, spacing=10)
+        btn_layout = BoxLayout(size_hint_y=0.2, spacing=10)
 
-        self.btn_camera = Button(text="КАМЕРА", background_color=(0.13, 0.59, 0.95, 1))
+        self.btn_camera = Button(text="CAMERA", background_color=(0.13, 0.59, 0.95, 1))
         self.btn_camera.bind(on_press=self.start_camera_scan)
         btn_layout.add_widget(self.btn_camera)
 
-        self.btn_finish = Button(text="ЗАВЕРШИТЬ", background_color=(0.3, 0.69, 0.31, 1))
+        self.btn_finish = Button(text=t["end_shift"], background_color=(0.3, 0.69, 0.31, 1))
         self.btn_finish.bind(on_press=self.finish_shift)
         btn_layout.add_widget(self.btn_finish)
 
@@ -65,7 +80,14 @@ class MobileAggregatorApp(App):
         self.process_code(raw)
         instance.focus = True
 
+    def change_lang(self, lang):
+        self.lang = lang
+        t = TEXT[self.lang]
+        self.btn_finish.text = t["end_shift"]
+        self.update_status_label()
+
     def process_code(self, raw):
+        t = TEXT[self.lang]
         if not raw: return
 
         if self.wait_sscc:
@@ -74,12 +96,12 @@ class MobileAggregatorApp(App):
                 self.current_units = []
                 self.in_box = 0
                 self.wait_sscc = False
-                self.update_ui("Коробка закрыта!")
+                self.update_ui(t["box_closed"])
             else:
-                self.show_error("Ожидается SSCC (00)")
+                self.show_error(t["err_expect_sscc"])
         else:
             if raw.startswith("00"):
-                self.show_error("Коробка еще не полная!")
+                self.show_error(t["warn_box_incomplete"])
                 return
 
             try:
@@ -89,27 +111,36 @@ class MobileAggregatorApp(App):
 
                 if self.in_box >= self.box_size:
                     self.wait_sscc = True
-                    self.update_ui("ОЖИДАНИЕ SSCC")
+                    self.update_ui(t["wait_sscc_box"])
                 else:
-                    self.update_ui(f"Собрано: {self.in_box} / {self.box_size}")
+                    self.update_ui(f"{t['collected']}: {self.in_box} / {self.box_size}")
 
-                self.last_codes_label.text = f"Последний: {parsed['clean']}\n{self.last_codes_label.text[:100]}"
+                self.last_codes_label.text = f"{t['report_prev']}: {parsed['clean']}\n{self.last_codes_label.text[:100]}"
             except GS1Error as e:
                 self.show_error(str(e))
+
+    def update_status_label(self):
+        t = TEXT[self.lang]
+        if self.wait_sscc:
+            self.update_ui(t["wait_sscc_box"])
+        else:
+            self.update_ui(f"{t['collected']}: {self.in_box} / {self.box_size}")
 
     def update_ui(self, text):
         self.info_label.text = text
 
     def show_error(self, text):
-        popup = Popup(title='Ошибка', content=Label(text=text), size_hint=(0.8, 0.4))
+        t = TEXT[self.lang]
+        popup = Popup(title=t["error"], content=Label(text=text), size_hint=(0.8, 0.4))
         popup.open()
 
     def start_camera_scan(self, instance):
         # В реальности здесь вызывается интент камеры или специализированная библиотека
-        self.show_error("Функция камеры требует сборки с OpenCV/Zbar")
+        self.show_error("Camera requires OpenCV/Zbar build")
 
     def finish_shift(self, instance):
-        self.show_error("Смена завершена. Отчет сохранен.")
+        t = TEXT[self.lang]
+        self.show_error(t["sent"])
 
     # --- Специфическая логика для ТСД ---
     def setup_tsd_broadcast(self):
