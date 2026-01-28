@@ -4,12 +4,12 @@ import requests
 import threading
 import time
 
-# Адрес сервера лицензий (в реальных условиях должен быть публичный IP или домен)
-# Например: http://192.168.1.50:8080
-SERVER_URL = "http://127.0.0.1:8080"
+# Адрес сервера лицензий по умолчанию
+DEFAULT_SERVER_URL = "http://127.0.0.1:8080"
 
 class AdminDashboard:
     def __init__(self, root):
+        self.server_url = DEFAULT_SERVER_URL
         self.root = root
         self.root.title("Aggregator Enterprise - ПАНЕЛЬ УПРАВЛЕНИЯ")
         self.root.geometry("1000x650")
@@ -33,10 +33,14 @@ class AdminDashboard:
         search_frame = tk.Frame(top_frame, bg="#2c3e50")
         search_frame.pack(side="right", padx=20)
 
+        tk.Label(search_frame, text="Сервер:", fg="white", bg="#2c3e50").pack(side="left", padx=5)
+        self.url_var = tk.StringVar(value=DEFAULT_SERVER_URL)
+        tk.Entry(search_frame, textvariable=self.url_var, width=20).pack(side="left", padx=5)
+
         tk.Label(search_frame, text="Поиск:", fg="white", bg="#2c3e50").pack(side="left", padx=5)
         self.search_var = tk.StringVar()
         self.search_var.trace("w", lambda *args: self.filter_data())
-        tk.Entry(search_frame, textvariable=self.search_var, width=25, font=("Arial", 11)).pack(side="left", padx=5)
+        tk.Entry(search_frame, textvariable=self.search_var, width=15, font=("Arial", 11)).pack(side="left", padx=5)
 
         # Информационная панель
         self.status_bar = tk.Frame(root, bg="#ecf0f1", height=30)
@@ -91,9 +95,10 @@ class AdminDashboard:
         self.load_data()
 
     def load_data(self):
+        self.server_url = self.url_var.get().strip()
         def _fetch():
             try:
-                resp = requests.get(f"{SERVER_URL}/list", timeout=5)
+                resp = requests.get(f"{self.server_url}/list", timeout=5)
                 if resp.status_code == 200:
                     self.all_data = resp.json()
                     self.root.after(0, self.filter_data)
@@ -132,9 +137,10 @@ class AdminDashboard:
             messagebox.showwarning("Внимание", "Выберите устройство из списка")
             return
 
+        self.server_url = self.url_var.get().strip()
         hwid = self.tree.item(selected[0])['values'][0]
         try:
-            resp = requests.post(f"{SERVER_URL}/update_status", json={"hwid": hwid, "status": status}, timeout=5)
+            resp = requests.post(f"{self.server_url}/update_status", json={"hwid": hwid, "status": status}, timeout=5)
             if resp.status_code == 200:
                 self.load_data()
                 action = "заблокировано" if status == 'blocked' else "разблокировано"

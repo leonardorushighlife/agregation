@@ -13,7 +13,7 @@ from state import State
 from gs1 import parse_gs1
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
-from licensing import check_license
+from licensing import check_license, start_license_heartbeat
 
 # Вспомогательные функции для обфускации строк
 def _d(h): return bytes.fromhex(h).decode()
@@ -105,10 +105,14 @@ class App:
         self.root.resizable(False, False)
 
         # Проверка лицензии и блокировки
-        allowed, msg = check_license(self.config.get("license_server"))
+        lic_srv = self.config.get("license_server")
+        allowed, msg = check_license(lic_srv)
         if not allowed:
             self.show_blocked_screen(msg)
             return
+
+        if lic_srv:
+            start_license_heartbeat(lic_srv)
 
         self.duplicates = DuplicateChecker(
             self.config["db_path"],
@@ -117,6 +121,7 @@ class App:
             server_ip=self.config.get("server_ip", "")
         )
         self.state = State(self.config["box_size"])
+        self.agg_mode = "unit" # По умолчанию
         self.paused = False
 
         self.show_language_screen()
@@ -342,17 +347,56 @@ class App:
         t = TEXT[self.lang]
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
+
+        tk.Label(frame, text=t["date"], font=("Arial", 10)).pack()
         self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y")); self.entry_date.pack(pady=5)
+
         vcmd = (self.root.register(lambda P: P == "" or P.isdigit()), '%P')
-        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd); self.entry_wp.pack(pady=5); tk.Label(frame, text=t["workplace"]).pack()
-        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5); tk.Label(frame, text=t["name"]).pack()
+        tk.Label(frame, text=t["workplace"], font=("Arial", 10)).pack()
+        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd); self.entry_wp.pack(pady=5)
+
+        tk.Label(frame, text=t["name"], font=("Arial", 10)).pack()
+        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
+
+        # Выбор режима агрегации
+        tk.Label(frame, text="Режим агрегации:", font=("Arial", 10, "bold")).pack(pady=(10, 0))
+        self.mode_var = tk.StringVar(value="unit")
+        mode_frame = tk.Frame(frame)
+        mode_frame.pack()
+        tk.Radiobutton(mode_frame, text="Короб (Юниты)", variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
+        tk.Radiobutton(mode_frame, text="Палета (Короба)", variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
+
+        self.pallet_size_frame = tk.Frame(frame)
+        tk.Label(self.pallet_size_frame, text="Коробок в палете:").pack(side="left")
+        self.entry_pallet_size = tk.Entry(self.pallet_size_frame, width=10, validate="key", validatecommand=vcmd)
+        self.entry_pallet_size.insert(0, "10")
+        self.entry_pallet_size.pack(side="left", padx=5)
+
+        self.toggle_mode_fields()
+
         tk.Button(frame, text=t["start"], font=("Arial", 16), width=26, height=2, command=self.start_shift).pack(pady=30)
+
+    def toggle_mode_fields(self):
+        if self.mode_var.get() == "pallet":
+            self.pallet_size_frame.pack(pady=5)
+        else:
+            self.pallet_size_frame.pack_forget()
 
     def start_shift(self):
         if not self.entry_date.get() or not self.entry_wp.get() or not self.entry_name.get():
             messagebox.showerror("Ошибка", "Заполните все поля"); return
+
+        self.agg_mode = self.mode_var.get()
+        size = int(self.config["box_size"])
+        if self.agg_mode == "pallet":
+            try:
+                size = int(self.entry_pallet_size.get())
+            except:
+                messagebox.showerror("Ошибка", "Введите корректное количество коробок"); return
+
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
-        self.state.reset(self.config["box_size"]); self.show_scan_screen()
+        self.state.reset(size, mode=self.agg_mode)
+        self.show_scan_screen()
 
     def show_scan_screen(self):
         self.clear()
@@ -401,16 +445,26 @@ class App:
         raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
         if not raw_input: return
         raw = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
+
+        if self.state.mode == "pallet":
+            self.on_scan_pallet(raw)
+        else:
+            self.on_scan_unit(raw)
+        self.scan_entry.focus_set()
+
+    def on_scan_unit(self, raw):
         if self.state.wait_sscc:
-            if not raw.startswith("00"): messagebox.showerror("Ошибка", "Ожидается SSCC (00)"); return
+            if not raw.startswith("00"):
+                messagebox.showerror("Ошибка", "Ожидается код коробки (SSCC, начинается на 00)"); return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
-                self.show_last(f"Закрыто: {raw}"); self.update_info()
+                self.show_last(f"Закрыто (Короб): {raw}"); self.update_info()
             except Exception as e: messagebox.showerror("Ошибка", str(e))
         else:
-            if raw.startswith("00") and len(raw) >= 18: messagebox.showwarning("Внимание", "Коробка не полная!"); return
+            if raw.startswith("00") and len(raw) >= 18:
+                messagebox.showwarning("Внимание", "Коробка не полная!"); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]: raise Exception("Неверный GTIN")
@@ -419,7 +473,32 @@ class App:
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
                 else: messagebox.showerror("Ошибка GS1", str(e))
-        self.scan_entry.focus_set()
+
+    def on_scan_pallet(self, raw):
+        if self.state.wait_sscc:
+            # Ожидаем палетный код (001)
+            if not raw.startswith("001"):
+                messagebox.showerror("Ошибка", "Ожидается код палеты (начинается на 001)"); return
+            try:
+                self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
+                # Для палет units - это список кодов коробок
+                self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
+                self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
+                self.show_last(f"Закрыто (Палета): {raw}"); self.update_info()
+            except Exception as e: messagebox.showerror("Ошибка", str(e))
+        else:
+            # Ожидаем код коробки (000)
+            if not raw.startswith("000"):
+                messagebox.showerror("Ошибка", "Ожидается код коробки (начинается на 000)"); return
+            try:
+                self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
+                # В режиме палеты мы сохраняем код коробки как "юнит"
+                parsed = {"clean": raw, "raw": raw, "gtin": "BOX"}
+                self.state.scan_unit(parsed)
+                self.show_last(f"Добавлена коробка: {raw}"); self.update_info()
+            except Exception as e:
+                if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
+                else: messagebox.showerror("Ошибка", str(e))
 
     def perform_save(self):
         summary = self.state.get_shift_summary()
@@ -440,12 +519,16 @@ class App:
         return files
 
     def generate_xml(self, boxes):
+        tin = self.config.get("lp_tin", "7777777777")
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n<unit_pack>\n'
+        xml += f'    <Document>\n        <organisation>\n            <id_info>\n                <LP_info LP_TIN="{tin}" />\n            </id_info>\n        </organisation>\n'
         for s, u in boxes:
-            xml += f'<pack_content><pack_code>{s}</pack_code>\n'
-            for x in u: xml += f'<cis>{x["clean"]}</cis>\n'
-            xml += '</pack_content>\n'
-        return xml + '</unit_pack>'
+            xml += f'        <pack_content>\n            <pack_code>{s}</pack_code>\n'
+            for x in u:
+                xml += f'            <cis>{x["clean"]}</cis>\n'
+            xml += '        </pack_content>\n'
+        xml += '    </Document>\n</unit_pack>'
+        return xml
 
     def gen_xls_agg(self, boxes, fn):
         wb = openpyxl.Workbook(); ws = wb.active; ws.append(["AGGREGATE", "ITEM"])
@@ -491,7 +574,12 @@ class App:
         self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
 
     def update_info(self):
-        txt = "⚠️ ОЖИДАНИЕ SSCC" if self.state.wait_sscc else f"Коробка: {self.state.box}\nСобрано: {self.state.in_box} / {self.state.box_size}"
+        if self.state.wait_sscc:
+            txt = "⚠️ ОЖИДАНИЕ ПАЛЕТЫ (001)" if self.state.mode == "pallet" else "⚠️ ОЖИДАНИЕ КОРОБКИ (00)"
+        else:
+            label = "Палета" if self.state.mode == "pallet" else "Коробка"
+            sub_label = "Коробок" if self.state.mode == "pallet" else "Собрано"
+            txt = f"{label}: {self.state.box}\n{sub_label}: {self.state.in_box} / {self.state.box_size}"
         self.info.config(text=txt)
 
 def run(): App().root.mainloop()

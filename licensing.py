@@ -18,14 +18,7 @@ def get_hwid():
 def check_license(server_url):
     """Проверяет лицензию на удаленном сервере администратора"""
     hwid = get_hwid()
-    try:
-        # Получаем локальный IP для отчета админу
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-    except:
-        local_ip = "127.0.0.1"
+    local_ip = get_my_ip()
 
     if not server_url:
         return True, "Сервер лицензий не настроен"
@@ -45,3 +38,33 @@ def check_license(server_url):
         return True, "Сервер недоступен, работа в оффлайн режиме"
     except Exception as e:
         return True, f"Оффлайн режим: {e}"
+
+def get_my_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
+def start_license_heartbeat(server_url):
+    import threading
+    import time
+
+    def heartbeat():
+        hwid = get_hwid()
+        while True:
+            try:
+                payload = {
+                    "hwid": hwid,
+                    "ip": get_my_ip(),
+                    "hostname": socket.gethostname()
+                }
+                requests.post(f"{server_url}/check", json=payload, timeout=5)
+            except:
+                pass
+            time.sleep(60) # Раз в минуту
+
+    threading.Thread(target=heartbeat, daemon=True).start()

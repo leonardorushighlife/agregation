@@ -40,10 +40,12 @@ def check():
             status = row[0]
             cursor.execute("UPDATE clients SET ip = ?, hostname = ?, last_seen = ? WHERE hwid = ?",
                            (ip, hostname, now, hwid))
+            print(f"Update: {hostname} ({ip}) - {now}")
         else:
             status = 'allowed' # По умолчанию разрешаем новый запуск
             cursor.execute("INSERT INTO clients (hwid, ip, hostname, last_seen, status) VALUES (?, ?, ?, ?, ?)",
                            (hwid, ip, hostname, now, status))
+            print(f"New client: {hostname} ({ip}) - {now}")
         conn.commit()
 
     return jsonify({
