@@ -8,8 +8,8 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("Пустой код")
 
-    # Проверка на запрещенные текстовые префиксы (согласно ТЗ)
-    if raw.startswith("FNC1") or raw.startswith("GS"):
+    # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
+    if strict and (raw.startswith("FNC1") or raw.startswith("GS")):
         raise GS1Error("Нарушение структуры GS1: Недопустимый текстовый префикс FNC1/GS.")
 
     data = raw
@@ -75,8 +75,8 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     rest = rest[2:]
 
     # 4. Поиск разделителя GS перед AI 93
-    # Проверка на запрещенные текстовые разделители (согласно ТЗ)
-    if "GS" in rest or "FNC1" in rest:
+    # Проверка на запрещенные текстовые разделители (только в строгом режиме)
+    if strict and ("GS" in rest or "FNC1" in rest):
         raise GS1Error("Нарушение структуры GS1: Использование текстового 'GS' или 'FNC1' вместо спецсимвола.")
 
     # Проверяем ASCII 29, ASCII 232 и ПРОБЕЛ (частое поведение сканеров)

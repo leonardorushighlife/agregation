@@ -524,18 +524,43 @@ class App:
         summary = self.state.get_shift_summary()
         if not summary["data"]: return []
         ts = datetime.now().strftime("%H%M%S"); dt = self.shift_info['date'].replace('.', '_'); op = self.shift_info['name'].replace(' ', '_')
-        os.makedirs("output", exist_ok=True); base = f"output/{t['fn_shift']}_{dt}_{op}_{ts}"
-        xls_a = f"{base}_{t['fn_agg']}.xlsx"; xls_n = f"{base}_{t['fn_prod']}.xlsx"; csv_n = f"{base}_{t['fn_prod']}.csv"; txt_d = f"{base}_{t['fn_dups']}.txt"
-        files = [xls_a, xls_n, csv_n]; LIMIT = 30000; current = []; count = 0; part = 1
+
+        os.makedirs("output", exist_ok=True)
+
+        is_pallet = (self.state.mode == "pallet")
+        prefix = f"{t['pallet']}_" if is_pallet else ""
+        base = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
+
+        xls_a = f"{base}_{t['fn_agg']}.xlsx"
+        txt_d = f"{base}_{t['fn_dups']}.txt"
+
+        if is_pallet:
+            files = [xls_a]
+        else:
+            xls_n = f"{base}_{t['fn_prod']}.xlsx"
+            csv_n = f"{base}_{t['fn_prod']}.csv"
+            files = [xls_a, xls_n, csv_n]
+
+        LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
             if count + len(box[1]) > LIMIT and current:
                 fn = f"{base}_{t['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
             current.append(box); count += len(box[1])
+
         if current:
             fn = f"{base}_{t['fn_part']}_{part}.txt" if part > 1 else f"{base}.txt"
             open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
-        self.gen_xls_agg(summary["data"], xls_a); self.gen_xls_prod(summary["data"], xls_n); self.gen_csv_prod(summary["data"], csv_n)
-        if summary.get("duplicates"): self.gen_txt_dups(summary["duplicates"], txt_d); files.append(txt_d)
+
+        self.gen_xls_agg(summary["data"], xls_a)
+
+        if not is_pallet:
+            self.gen_xls_prod(summary["data"], xls_n)
+            self.gen_csv_prod(summary["data"], csv_n)
+
+        if summary.get("duplicates"):
+            self.gen_txt_dups(summary["duplicates"], txt_d)
+            files.append(txt_d)
+
         return files
 
     def generate_xml(self, boxes):
