@@ -228,7 +228,7 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Админ-панель")
-        win.geometry("600x750")
+        win.geometry("600x820")
 
         def block(title, val, enabled, row):
             tk.Label(win, text=title).grid(row=row, column=0, sticky="w", padx=10, pady=5)
@@ -276,6 +276,9 @@ class App:
         row += 1
         tg_c = block("TG Chat ID", self.config["tg_chat_id"], None, row)
 
+        row += 1
+        tk.Button(win, text="🔍 Диагностика сканера", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
+
         def save():
             self.config.update({
                 "box_size": int(box_e.get()),
@@ -299,6 +302,39 @@ class App:
             win.destroy()
 
         tk.Button(win, text="Сохранить", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
+
+    def scanner_diag(self):
+        win = tk.Toplevel(self.root)
+        win.title("Диагностика сканера")
+        win.geometry("500x380")
+
+        tk.Label(win, text="Отсканируйте код для проверки скрытых символов", font=("Arial", 10, "bold")).pack(pady=10)
+        text_area = tk.Text(win, height=12, width=55)
+        text_area.pack(padx=10, pady=10)
+
+        diag_entry = tk.Entry(win)
+        diag_entry.pack(pady=5)
+        diag_entry.focus_set()
+
+        def on_diag_scan(event):
+            raw = diag_entry.get()
+            diag_entry.delete(0, tk.END)
+
+            visual = ""
+            hex_view = ""
+            for char in raw:
+                code = ord(char)
+                if code == 29: visual += "{GS}"
+                elif code == 232: visual += "{FNC1}"
+                elif code < 32: visual += f"{{0x{code:02x}}}"
+                else: visual += char
+                hex_view += f"{code:02x} "
+
+            text_area.delete("1.0", tk.END)
+            text_area.insert(tk.END, f"Получено: {visual}\n\nHEX: {hex_view}\n\nДлина: {len(raw)}")
+            return "break"
+
+        diag_entry.bind("<Return>", on_diag_scan)
 
     def show_shift_form(self):
         self.clear()
@@ -334,7 +370,10 @@ class App:
         t = TEXT[self.lang]
 
         self.info = tk.Label(self.root, font=("Arial", 16), justify="center")
-        self.info.pack(pady=25)
+        self.info.pack(pady=20)
+
+        if self.config.get("is_server"):
+            tk.Label(self.root, text=f"IP сервера: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
 
         self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center")
         self.last.pack(pady=15)
@@ -398,10 +437,18 @@ class App:
             messagebox.showerror("Ошибка", err_msg)
 
     def on_scan(self, event):
-        raw = self.sanitize_input(self.translate_layout(self.scan_entry.get().strip()))
+        raw = self.scan_entry.get().strip() # Не очищаем через sanitize_input для проверки спецсимволов
         self.scan_entry.delete(0, tk.END)
         if not raw:
             return
+
+        # Переводим раскладку только для обычных символов, не трогая спецсимволы
+        processed_raw = ""
+        for c in raw:
+            if ord(c) >= 32: processed_raw += LAYOUT_MAP.get(c, c)
+            else: processed_raw += c
+
+        raw = processed_raw
 
         if self.state.wait_sscc:
             if not raw.startswith("00"):
@@ -464,15 +511,37 @@ class App:
         os.makedirs("output", exist_ok=True)
         base = f"output/смена_{dt}_{op}_{ts}"
 
-        txt = f"{base}.txt"
         xls_a = f"{base}_агрегация.xlsx"
         xls_n = f"{base}_нанесение.xlsx"
         txt_d = f"{base}_дубликаты.txt"
 
-        files = [txt, xls_a, xls_n]
+        files = [xls_a, xls_n]
 
-        with open(txt, "w", encoding="utf-8") as f:
-            f.write(self.generate_xml(summary["data"]))
+        # Разбивка по 30000 кодов в TXT (XML)
+        LIMIT = 30000
+        current_batch = []
+        count = 0
+        part = 1
+
+        for box in summary["data"]:
+            box_len = len(box[1])
+            if count + box_len > LIMIT and current_batch:
+                fn = f"{base}_часть_{part}.txt"
+                with open(fn, "w", encoding="utf-8") as f:
+                    f.write(self.generate_xml(current_batch))
+                files.append(fn)
+                current_batch = []
+                count = 0
+                part += 1
+
+            current_batch.append(box)
+            count += box_len
+
+        if current_batch:
+            fn = f"{base}_часть_{part}.txt" if part > 1 else f"{base}.txt"
+            with open(fn, "w", encoding="utf-8") as f:
+                f.write(self.generate_xml(current_batch))
+            files.append(fn)
 
         self.gen_xls_agg(summary["data"], xls_a)
         self.gen_xls_prod(summary["data"], xls_n)
