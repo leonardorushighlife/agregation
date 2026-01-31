@@ -276,7 +276,7 @@ class App:
         t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
-        win.geometry("650x800")
+        win.geometry("650x600")
 
         # Создаем Canvas и Scrollbar
         canvas = tk.Canvas(win, bg="#f0f0f0")
