@@ -127,6 +127,7 @@ TEXT = {
     "fn_shift": "смена",
     "fn_agg": "агрегация",
     "fn_prod": "нанесение",
+    "fn_all": "ВСЕ",
     "fn_dups": "дубликаты",
     "fn_part": "часть"
 },
@@ -258,6 +259,7 @@ TEXT = {
     "fn_shift": "班次",
     "fn_agg": "聚合",
     "fn_prod": "应用",
+    "fn_all": "全部",
     "fn_dups": "重复",
     "fn_part": "部分"
 },
@@ -389,6 +391,7 @@ TEXT = {
     "fn_shift": "وردية",
     "fn_agg": "تجميع",
     "fn_prod": "تطبيق",
+    "fn_all": "الكل",
     "fn_dups": "مكررات",
     "fn_part": "جزء"
 },
@@ -520,6 +523,7 @@ TEXT = {
     "fn_shift": "şîft",
     "fn_agg": "agregasyon",
     "fn_prod": "nîşankirin",
+    "fn_all": "HEMÛ",
     "fn_dups": "dubareyan",
     "fn_part": "beş"
 }

@@ -276,25 +276,47 @@ class App:
         t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
-        win.geometry("600x950")
+        win.geometry("650x800")
+
+        # Создаем Canvas и Scrollbar
+        canvas = tk.Canvas(win, bg="#f0f0f0")
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg="#f0f0f0")
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", expand=True, fill="both")
+
+        # Функция для прокрутки колесиком мыши
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        win.bind_all("<MouseWheel>", _on_mousewheel)
 
         def block(title, val, enabled, row):
-            tk.Label(win, text=title).grid(row=row, column=0, sticky="w", padx=10, pady=5)
-            e = tk.Entry(win, width=30)
+            tk.Label(scrollable_frame, text=title, bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            e = tk.Entry(scrollable_frame, width=30)
             e.insert(0, str(val))
             e.grid(row=row, column=1)
             if enabled is not None:
                 v = tk.BooleanVar(value=enabled)
-                tk.Checkbutton(win, variable=v).grid(row=row, column=2)
+                tk.Checkbutton(scrollable_frame, variable=v, bg="#f0f0f0").grid(row=row, column=2)
                 return e, v
             return e
 
         row = 0
-        tk.Label(win, text=t["admin_main_settings"], font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        tk.Label(scrollable_frame, text=t["admin_main_settings"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
         row += 1
         box_e = block(t["admin_box_size"], self.config["box_size"], None, row)
         box_v = tk.BooleanVar(value=self.config.get("box_size_fixed", True))
-        tk.Checkbutton(win, text=t.get("admin_box_size_fixed", "Fixed"), variable=box_v).grid(row=row, column=2)
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_box_size_fixed", "Fixed"), variable=box_v, bg="#f0f0f0").grid(row=row, column=2)
         row += 1
         tin_e = block(t["admin_tin"], self.config["lp_tin"], None, row)
         row += 1
@@ -307,25 +329,25 @@ class App:
         ds_e, ds_v = block(t["admin_ds"], self.config["ds_number"], self.config["ds_enabled"], row)
 
         row += 1
-        tk.Label(win, text=t["admin_network_tg"], font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        tk.Label(scrollable_frame, text=t["admin_network_tg"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
         row += 1
         srv_v = tk.BooleanVar(value=self.config.get("is_server", False))
-        tk.Checkbutton(win, text=t["admin_use_srv"], variable=srv_v).grid(row=row, column=1, sticky="w")
+        tk.Checkbutton(scrollable_frame, text=t["admin_use_srv"], variable=srv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
         row += 1
         gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True))
-        tk.Checkbutton(win, text=t["admin_gs1_strict"], variable=gs1_v).grid(row=row, column=1, sticky="w")
+        tk.Checkbutton(scrollable_frame, text=t["admin_gs1_strict"], variable=gs1_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
         if self.config.get("is_server"):
             row += 1
             cur_ip = get_local_ip()
-            tk.Label(win, text=f"{t['admin_local_ip']}: {cur_ip}", fg="blue", font=("Arial", 10, "bold")).grid(row=row, column=1, sticky="w")
+            tk.Label(scrollable_frame, text=f"{t['admin_local_ip']}: {cur_ip}", fg="blue", font=("Arial", 10, "bold"), bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
             row += 1
             clients = self.duplicates.get_active_clients()
-            tk.Label(win, text=f"{t['active_clients_label']}: {len(clients)}", font=("Arial", 10, "bold")).grid(row=row, column=0, sticky="w", padx=10)
+            tk.Label(scrollable_frame, text=f"{t['active_clients_label']}: {len(clients)}", font=("Arial", 10, "bold"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
             if clients:
-                tk.Label(win, text=", ".join(clients), fg="gray").grid(row=row, column=1, sticky="w")
+                tk.Label(scrollable_frame, text=", ".join(clients), fg="gray", bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
         row += 1
         key_e = block("Key", self.config["access_key"], None, row)
@@ -340,26 +362,33 @@ class App:
         lic_e = block("License Server", self.config.get("license_server", ""), None, row)
 
         row += 1
-        tk.Label(win, text="Scanner (USB COM)", font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
+        tk.Label(scrollable_frame, text="Scanner (USB COM)", font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
         row += 1
         com_v = tk.BooleanVar(value=self.config.get("com_enabled", False))
-        tk.Checkbutton(win, text=t["admin_com_enable"], variable=com_v).grid(row=row, column=1, sticky="w")
+        tk.Checkbutton(scrollable_frame, text=t["admin_com_enable"], variable=com_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
         row += 1
-        tk.Label(win, text=t["admin_com_port"]).grid(row=row, column=0, sticky="w", padx=10)
+        tk.Label(scrollable_frame, text=t["admin_com_port"], bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
         com_port_var = tk.StringVar(value=self.config.get("com_port", ""))
-        com_cb = ttk.Combobox(win, textvariable=com_port_var, values=self.get_ports(), width=27)
+        com_cb = ttk.Combobox(scrollable_frame, textvariable=com_port_var, values=self.get_ports(), width=27)
         com_cb.grid(row=row, column=1)
-        tk.Button(win, text=t["admin_com_refresh"], command=lambda: com_cb.config(values=self.get_ports())).grid(row=row, column=2)
+        tk.Button(scrollable_frame, text=t["admin_com_refresh"], command=lambda: com_cb.config(values=self.get_ports())).grid(row=row, column=2)
         row += 1
         baud_e = block(t["admin_com_baud"], self.config.get("com_baud", 9600), None, row)
 
         row += 1
-        tk.Button(win, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
+        tk.Button(scrollable_frame, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
 
         def save():
             t = TEXT[self.lang]
+            try:
+                b_size = int(box_e.get())
+                b_baud = int(baud_e.get())
+            except:
+                messagebox.showerror(t["error"], "Invalid numbers")
+                return
+
             self.config.update({
-                "box_size": int(box_e.get()),
+                "box_size": b_size,
                 "lp_tin": tin_e.get(),
                 "gtin": gtin_e.get(),
                 "gtin_enabled": gtin_v.get(),
@@ -378,16 +407,17 @@ class App:
                 "license_server": lic_e.get().strip(),
                 "com_enabled": com_v.get(),
                 "com_port": com_port_var.get(),
-                "com_baud": int(baud_e.get()),
+                "com_baud": b_baud,
                 "box_size_fixed": box_v.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
                 self.start_serial_reader()
             messagebox.showinfo(t["success"], t["settings_saved"])
+            win.unbind_all("<MouseWheel>")
             win.destroy()
 
-        tk.Button(win, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
+        tk.Button(scrollable_frame, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
 
     def scanner_diag(self):
         t = TEXT[self.lang]
@@ -628,26 +658,32 @@ class App:
 
         is_pallet = (self.state.mode == "pallet")
         prefix = f"{t['pallet']}_" if is_pallet else ""
-        base = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
 
-        xls_a = f"{base}_{t['fn_agg']}.xlsx"
-        txt_d = f"{base}_{t['fn_dups']}.txt"
+        # Базовое имя для большинства файлов (смена)
+        base_shift = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
+        # Базовое имя для агрегации (TXT)
+        base_agg = f"output/{prefix}{t.get('fn_agg', 'агрегация')}_{dt}_{op}_{ts}"
+        # Базовое имя для CSV (ВСЕ)
+        base_all = f"output/{prefix}{t.get('fn_all', 'ВСЕ')}_{dt}_{op}_{ts}"
+
+        xls_a = f"{base_shift}_{t['fn_agg']}.xlsx"
+        txt_d = f"{base_shift}_{t['fn_dups']}.txt"
 
         if is_pallet:
             files = [xls_a]
         else:
-            xls_n = f"{base}_{t['fn_prod']}.xlsx"
-            csv_n = f"{base}_{t['fn_prod']}.csv"
+            xls_n = f"{base_shift}_{t['fn_prod']}.xlsx"
+            csv_n = f"{base_all}.csv"
             files = [xls_a, xls_n, csv_n]
 
         LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
             if count + len(box[1]) > LIMIT and current:
-                fn = f"{base}_{t['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
+                fn = f"{base_agg}_{t['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
             current.append(box); count += len(box[1])
 
         if current:
-            fn = f"{base}_{t['fn_part']}_{part}.txt" if part > 1 else f"{base}.txt"
+            fn = f"{base_agg}_{t['fn_part']}_{part}.txt" if part > 1 else f"{base_agg}.txt"
             open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
 
         self.gen_xls_agg(summary["data"], xls_a)
@@ -692,7 +728,7 @@ class App:
         with open(fn, "w", encoding="utf-8") as f:
             for s, u in boxes:
                 for x in u:
-                    f.write(f"{x['clean']}\n")
+                    f.write(f"{x['raw']}\n")
 
     def gen_txt_dups(self, dups, fn):
         t = TEXT[self.lang]
