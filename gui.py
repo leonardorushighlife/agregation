@@ -62,7 +62,8 @@ def load_config():
         "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
         "gs1_strict": True, "server_ip": "",
         "license_server": "http://127.0.0.1:8080",
-        "com_enabled": False, "com_port": "", "com_baud": 9600
+        "com_enabled": False, "com_port": "", "com_baud": 9600,
+        "box_size_fixed": True
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -292,6 +293,8 @@ class App:
         tk.Label(win, text=t["admin_main_settings"], font=("Arial", 12, "bold")).grid(row=row, column=0, pady=10)
         row += 1
         box_e = block(t["admin_box_size"], self.config["box_size"], None, row)
+        box_v = tk.BooleanVar(value=self.config.get("box_size_fixed", True))
+        tk.Checkbutton(win, text=t.get("admin_box_size_fixed", "Fixed"), variable=box_v).grid(row=row, column=2)
         row += 1
         tin_e = block(t["admin_tin"], self.config["lp_tin"], None, row)
         row += 1
@@ -375,7 +378,8 @@ class App:
                 "license_server": lic_e.get().strip(),
                 "com_enabled": com_v.get(),
                 "com_port": com_port_var.get(),
-                "com_baud": int(baud_e.get())
+                "com_baud": int(baud_e.get()),
+                "box_size_fixed": box_v.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -432,6 +436,12 @@ class App:
         self.entry_pallet_size.insert(0, "10")
         self.entry_pallet_size.pack(side="left", padx=5)
 
+        self.unit_size_frame = tk.Frame(frame)
+        tk.Label(self.unit_size_frame, text=t.get("unit_size_label", "Units in box:")).pack(side="left")
+        self.entry_unit_size = tk.Entry(self.unit_size_frame, width=10, validate="key", validatecommand=vcmd)
+        self.entry_unit_size.insert(0, str(self.config["box_size"]))
+        self.entry_unit_size.pack(side="left", padx=5)
+
         self.toggle_mode_fields()
 
         tk.Button(frame, text=t["start"], font=("Arial", 16), width=26, height=2, command=self.start_shift).pack(pady=30)
@@ -439,8 +449,13 @@ class App:
     def toggle_mode_fields(self):
         if self.mode_var.get() == "pallet":
             self.pallet_size_frame.pack(pady=5)
+            self.unit_size_frame.pack_forget()
         else:
             self.pallet_size_frame.pack_forget()
+            if not self.config.get("box_size_fixed", True):
+                self.unit_size_frame.pack(pady=5)
+            else:
+                self.unit_size_frame.pack_forget()
 
     def start_shift(self):
         t = TEXT[self.lang]
@@ -454,6 +469,12 @@ class App:
                 size = int(self.entry_pallet_size.get())
             except:
                 messagebox.showerror(t["error"], t["pallet_size_label"]); return
+        else:
+            if not self.config.get("box_size_fixed", True):
+                try:
+                    size = int(self.entry_unit_size.get())
+                except:
+                    messagebox.showerror(t["error"], t.get("unit_size_label", "Units in box:")); return
 
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
         self.state.reset(size, mode=self.agg_mode)
