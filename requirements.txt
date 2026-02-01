@@ -4,3 +4,7 @@ cryptography
 flask
 kivy
 pyserial
+python-barcode
+reportlab
+pywin32
+Pillow

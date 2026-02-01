@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 import json
 import os
 import shutil
@@ -16,6 +16,12 @@ from gs1 import parse_gs1, GS1Error
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
 from licensing import check_license, start_license_heartbeat
+
+import barcode
+from barcode.writer import ImageWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
+from reportlab.lib.pagesizes import portrait
 
 # Вспомогательные функции для обфускации строк
 def _d(h): return bytes.fromhex(h).decode()
@@ -63,7 +69,9 @@ def load_config():
         "gs1_strict": True, "server_ip": "",
         "license_server": "http://127.0.0.1:8080",
         "com_enabled": False, "com_port": "", "com_baud": 9600,
-        "box_size_fixed": True
+        "box_size_fixed": True,
+        "conveyor_enabled": False, "conveyor_sscc_file": "",
+        "printer_name": "", "label_width": 58, "label_height": 40
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -376,6 +384,40 @@ class App:
         baud_e = block(t["admin_com_baud"], self.config.get("com_baud", 9600), None, row)
 
         row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_conveyor_title", "Conveyor"), font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
+        row += 1
+        conv_v = tk.BooleanVar(value=self.config.get("conveyor_enabled", False))
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_conveyor_enable", "Enable Conveyor"), variable=conv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_sscc_file", "SSCC File"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        sscc_file_var = tk.StringVar(value=self.config.get("conveyor_sscc_file", ""))
+        tk.Entry(scrollable_frame, textvariable=sscc_file_var, width=30).grid(row=row, column=1)
+        def browse_sscc():
+            fn = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            if fn: sscc_file_var.set(fn)
+        tk.Button(scrollable_frame, text=t.get("admin_btn_browse", "Browse"), command=browse_sscc).grid(row=row, column=2)
+        row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_printer", "Printer"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        printer_var = tk.StringVar(value=self.config.get("printer_name", ""))
+        # Попытка получить список принтеров если мы на Windows
+        printers = []
+        try:
+            import win32print
+            for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS):
+                printers.append(p[2])
+        except: pass
+        if printers:
+            printer_cb = ttk.Combobox(scrollable_frame, textvariable=printer_var, values=printers, width=27)
+            printer_cb.grid(row=row, column=1)
+        else:
+            tk.Entry(scrollable_frame, textvariable=printer_var, width=30).grid(row=row, column=1)
+
+        row += 1
+        lw_e = block(t.get("admin_label_width", "Width (mm)"), self.config.get("label_width", 58), None, row)
+        row += 1
+        lh_e = block(t.get("admin_label_height", "Height (mm)"), self.config.get("label_height", 40), None, row)
+
+        row += 1
         tk.Button(scrollable_frame, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
 
         def save():
@@ -408,7 +450,12 @@ class App:
                 "com_enabled": com_v.get(),
                 "com_port": com_port_var.get(),
                 "com_baud": b_baud,
-                "box_size_fixed": box_v.get()
+                "box_size_fixed": box_v.get(),
+                "conveyor_enabled": conv_v.get(),
+                "conveyor_sscc_file": sscc_file_var.get(),
+                "printer_name": printer_var.get(),
+                "label_width": int(lw_e.get()),
+                "label_height": int(lh_e.get())
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -418,6 +465,107 @@ class App:
             win.destroy()
 
         tk.Button(scrollable_frame, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
+
+    def get_next_sscc_from_file(self):
+        t = TEXT[self.lang]
+        path = self.config.get("conveyor_sscc_file")
+        if not path or not os.path.exists(path):
+            raise Exception("SSCC file not found")
+
+        with open(path, "r") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+
+        if not lines:
+            raise Exception(t.get("err_sscc_empty", "SSCC file is empty"))
+
+        sscc = lines[0]
+
+        # Перезаписываем файл без первого кода
+        with open(path, "w") as f:
+            for line in lines[1:]:
+                f.write(line + "\n")
+
+        return sscc
+
+    def generate_and_print_label(self, sscc):
+        t = TEXT[self.lang]
+        width_mm = self.config.get("label_width", 58)
+        height_mm = self.config.get("label_height", 40)
+        printer = self.config.get("printer_name")
+
+        try:
+            # Генерация GS1-128 для SSCC. Код AI 00.
+            # python-barcode Code128 с префиксом FNC1
+            from barcode.writer import ImageWriter
+            Code128 = barcode.get_class('code128')
+
+            os.makedirs("temp_labels", exist_ok=True)
+            barcode_path = os.path.join("temp_labels", f"bc_{sscc}")
+
+            # Контент для GS1-128 SSCC: AI (00) + 18 цифр.
+            # В Code128 для обозначения GS1 используется спец-символ в начале.
+            # В python-barcode мы можем просто добавить данные.
+            bc_data = f"00{sscc}"
+
+            writer = ImageWriter()
+            writer.set_options({"module_height": 10.0, "text_distance": 3.0, "font_size": 8, "quiet_zone": 2.0})
+
+            bc = Code128(bc_data, writer=writer)
+            bc_file = bc.save(barcode_path)
+
+            # Печать
+            if printer:
+                self.print_image_to_win_printer(bc_file, printer, width_mm, height_mm, sscc)
+
+        except Exception as e:
+            messagebox.showerror(t["error"], t.get("err_print", "Print error: {}").format(str(e)))
+
+    def print_image_to_win_printer(self, img_path, printer_name, w_mm, h_mm, sscc):
+        try:
+            import win32print
+            import win32ui
+            import win32con
+            from PIL import Image, ImageWin
+
+            hDC = win32ui.CreateDC()
+            hDC.CreatePrinterDC(printer_name)
+
+            dpi_x = hDC.GetDeviceCaps(win32con.LOGPIXELSX)
+            dpi_y = hDC.GetDeviceCaps(win32con.LOGPIXELSY)
+
+            bmp = Image.open(img_path)
+
+            hDC.StartDoc(f"Label_{sscc}")
+            hDC.StartPage()
+
+            dib = ImageWin.Dib(bmp)
+
+            target_w = int((w_mm / 25.4) * dpi_x)
+            target_h = int((h_mm / 25.4) * dpi_y)
+
+            # Центрирование или растягивание
+            dib.draw(hDC.GetHandleOutput(), (0, 0, target_w, target_h))
+
+            hDC.EndPage()
+            hDC.EndDoc()
+            hDC.DeleteDC()
+        except Exception as e:
+            print(f"WinPrint Exception: {e}")
+            raise Exception(f"WinPrint Error: {e}")
+
+    def trigger_conveyor_auto_sscc(self):
+        t = TEXT[self.lang]
+        try:
+            sscc = self.get_next_sscc_from_file()
+            self.duplicates.check_sscc(sscc)
+            units = self.state.scan_sscc(sscc)
+            self.duplicates.update_sscc_for_units([u['raw'] for u in units], sscc)
+            self.duplicates.save_box_to_recovery(sscc, units, self.shift_info)
+            self.show_last(f"{t['closed_box']}{sscc}")
+            self.update_info()
+            self.generate_and_print_label(sscc)
+        except Exception as e:
+            messagebox.showerror(t["error"], str(e))
 
     def scanner_diag(self):
         t = TEXT[self.lang]
@@ -588,7 +736,8 @@ class App:
                             barcode = line.decode('utf-8', errors='ignore').strip()
                             if barcode:
                                 self.root.after(0, lambda b=barcode: self.process_barcode(b))
-            except: pass
+            except Exception as e:
+                print(f"Serial reader error: {e}")
         threading.Thread(target=run_reader, daemon=True).start()
 
     def on_scan_unit(self, raw):
@@ -610,7 +759,9 @@ class App:
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
                     raise Exception(t["err_gtin"])
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
-                self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
+                res = self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
+                if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
+                    self.root.after(500, self.trigger_conveyor_auto_sscc)
             except GS1Error as e:
                 err_key = str(e)
                 msg = t.get(err_key, err_key)
@@ -642,8 +793,10 @@ class App:
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 # В режиме палеты мы сохраняем код коробки как "юнит"
                 parsed = {"clean": raw, "raw": raw, "gtin": "BOX"}
-                self.state.scan_unit(parsed)
+                res = self.state.scan_unit(parsed)
                 self.show_last(f"{t['added_box']}{raw}"); self.update_info()
+                if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
+                    self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
                 else: messagebox.showerror(t["error"], str(e))
@@ -752,7 +905,8 @@ class App:
             requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
             for p in files:
                 with open(p, "rb") as f: requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
-        except: pass
+        except Exception as e:
+            print(f"Telegram send error: {e}")
 
     def show_last(self, text):
         self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
