@@ -8,10 +8,11 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("err_empty")
 
-    if strict and (raw.startswith("FNC1") or raw.startswith("GS")):
+    data = raw.strip()
+
+    if strict and (data.startswith("FNC1") or data.startswith("GS")):
         raise GS1Error("err_gs1_structure")
 
-    data = raw
     has_fnc1_physical = False
 
     for prefix in ["]d2", "]d1", "]E0"]:
@@ -30,10 +31,13 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
             has_fnc1_physical = True
             data = data[1:]
 
-    has_fnc1_logical = has_fnc1_physical or data.startswith("01")
+    has_fnc1_logical = has_fnc1_physical or data.startswith("01") or data.startswith("(01)")
 
     if strict and not has_fnc1_logical:
         raise GS1Error("err_gs1_fnc1")
+
+    if data.startswith("(01)"):
+        data = "01" + data[4:]
 
     if not data.startswith("01"):
         if strict:
@@ -51,6 +55,9 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     gtin = data[2:16]
     rest = data[16:]
+
+    if rest.startswith("(21)"):
+        rest = "21" + rest[4:]
 
     if not rest.startswith("21"):
         if strict:
@@ -78,20 +85,21 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         tail_part = rest[gs_idx+1:]
         if tail_part.startswith("93"):
             tail = tail_part[2:]
+        elif tail_part.startswith("(93)"):
+            tail = tail_part[4:]
         else:
             tail = tail_part
     else:
-        if "93" in rest:
+        if "93" in rest or "(93)" in rest:
+            idx_93 = rest.find("93")
+            if idx_93 == -1: idx_93 = rest.find("(93)")
             if strict:
                 raise GS1Error("err_gs1_structure")
-            idx_93 = rest.find("93")
             serial = rest[:idx_93]
-            tail = rest[idx_93+2:]
         else:
             if strict:
                 raise GS1Error("err_gs1_structure")
             serial = rest
-            tail = ""
 
     if not serial:
         raise GS1Error("err_gs1_21")

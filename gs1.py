@@ -8,11 +8,16 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("err_empty")
 
+    # Предварительная очистка от непечатных символов в начале и конце (кроме GS/FNC1 если они важны)
+    # Но ТЗ говорит что первым символом НЕЛЬЗЯ GS.
+    # Однако некоторые сканеры могут слать мусор.
+    # Мы будем аккуратны и очистим только явный мусор.
+    data = raw.strip()
+
     # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
-    if strict and (raw.startswith("FNC1") or raw.startswith("GS")):
+    if strict and (data.startswith("FNC1") or data.startswith("GS")):
         raise GS1Error("err_gs1_structure")
 
-    data = raw
     has_fnc1_physical = False
 
     # 1. Поиск FNC1 в начале (физически: AIM ID или ASCII 232)
@@ -35,13 +40,18 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     # Логическое наличие FNC1 по структуре (если начинается с 01)
     # ТЗ: "Наличие FNC1 в начале (логически, по структуре)"
-    has_fnc1_logical = has_fnc1_physical or data.startswith("01")
+    # Мы также допускаем наличие скобок (01), так как некоторые сканеры их добавляют
+    has_fnc1_logical = has_fnc1_physical or data.startswith("01") or data.startswith("(01)")
 
     # Если строгая проверка включена и FNC1 не найден ни физически, ни логически
     if strict and not has_fnc1_logical:
         raise GS1Error("err_gs1_fnc1")
 
     # 2. Проверка AI 01
+    # Если есть скобки, убираем их
+    if data.startswith("(01)"):
+        data = "01" + data[4:]
+
     if not data.startswith("01"):
         # Если не начинается с 01, возможно FNC1 был в середине (ошибка сканера)
         # Но для Честного Знака 01 должен быть первым AI
@@ -63,6 +73,10 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     rest = data[16:]
 
     # 3. AI 21
+    # Опять же, обрабатываем возможные скобки (21)
+    if rest.startswith("(21)"):
+        rest = "21" + rest[4:]
+
     if not rest.startswith("21"):
         if strict:
             raise GS1Error("err_gs1_21")
@@ -93,25 +107,33 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         # Удаляем AI 93 если он там есть
         if tail_part.startswith("93"):
             tail = tail_part[2:]
+        elif tail_part.startswith("(93)"):
+            tail = tail_part[4:]
         else:
             tail = tail_part
     else:
         # Если разделителя нет, но есть 93
-        if "93" in rest:
-            if strict:
-                # В новом коде мы можем быть более лояльны к отсутствию GS перед 93
-                # если это разрешено настройкой, но ТЗ требует проверять ошибки.
-                # Оставим ошибку структуры если строго.
-                raise GS1Error("err_gs1_structure")
+        if "93" in rest or "(93)" in rest:
+            # Находим позицию 93 или (93)
             idx_93 = rest.find("93")
+            if idx_93 == -1: idx_93 = rest.find("(93)")
+
+            if strict:
+                # По ТЗ "ДОЛЖЕН быть разделитель GS" после (21) если есть хвост
+                # Но если мы хотим быть чуть лояльнее к отсутствию спецсимвола при наличии AI 93:
+                # raise GS1Error("err_gs1_structure")
+                # Однако ТЗ требует проверять ошибки, так что оставляем строго.
+                raise GS1Error("err_gs1_structure")
+
             serial = rest[:idx_93]
-            tail = rest[idx_93+2:]
         else:
             # Нет ни разделителя, ни 93
             if strict:
+                # ТЗ: "После (21) ДОЛЖЕН быть разделитель GS"
+                # Обычно это касается случая, когда за 21 следует другой AI.
+                # Если 21 последний, GS не обязателен. Но в ЧЗ за ним идет 93.
                 raise GS1Error("err_gs1_structure")
             serial = rest
-            tail = ""
 
     if not serial:
         raise GS1Error("err_gs1_21")

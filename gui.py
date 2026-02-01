@@ -71,7 +71,8 @@ def load_config():
         "com_enabled": False, "com_port": "", "com_baud": 9600,
         "box_size_fixed": True,
         "conveyor_enabled": False, "conveyor_sscc_file": "",
-        "printer_name": "", "label_width": 58, "label_height": 40
+        "printer_name": "", "label_width": 58, "label_height": 40,
+        "label_additional_text": ""
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -416,6 +417,8 @@ class App:
         lw_e = block(t.get("admin_label_width", "Width (mm)"), self.config.get("label_width", 58), None, row)
         row += 1
         lh_e = block(t.get("admin_label_height", "Height (mm)"), self.config.get("label_height", 40), None, row)
+        row += 1
+        la_e = block(t.get("admin_label_additional", "Additional Text"), self.config.get("label_additional_text", ""), None, row)
 
         row += 1
         tk.Button(scrollable_frame, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
@@ -455,7 +458,8 @@ class App:
                 "conveyor_sscc_file": sscc_file_var.get(),
                 "printer_name": printer_var.get(),
                 "label_width": int(lw_e.get()),
-                "label_height": int(lh_e.get())
+                "label_height": int(lh_e.get()),
+                "label_additional_text": la_e.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -492,30 +496,66 @@ class App:
         width_mm = self.config.get("label_width", 58)
         height_mm = self.config.get("label_height", 40)
         printer = self.config.get("printer_name")
+        date = self.shift_info.get("date", datetime.now().strftime("%d.%m.%Y"))
+        additional_text = self.config.get("label_additional_text", "")
 
         try:
-            # Генерация GS1-128 для SSCC. Код AI 00.
-            # python-barcode Code128 с префиксом FNC1
+            from PIL import Image, ImageDraw, ImageFont
             from barcode.writer import ImageWriter
             Code128 = barcode.get_class('code128')
 
             os.makedirs("temp_labels", exist_ok=True)
-            barcode_path = os.path.join("temp_labels", f"bc_{sscc}")
+            label_path = os.path.join("temp_labels", f"label_{sscc}.png")
 
-            # Контент для GS1-128 SSCC: AI (00) + 18 цифр.
-            # В Code128 для обозначения GS1 используется спец-символ в начале.
-            # В python-barcode мы можем просто добавить данные.
-            bc_data = f"00{sscc}"
+            # 300 DPI для печати
+            dpi = 300
+            w_px = int((width_mm / 25.4) * dpi)
+            h_px = int((height_mm / 25.4) * dpi)
+            m_px = int((1 / 25.4) * dpi) # 1мм отступ
 
-            writer = ImageWriter()
-            writer.set_options({"module_height": 10.0, "text_distance": 3.0, "font_size": 8, "quiet_zone": 2.0})
+            img = Image.new("RGB", (w_px, h_px), "white")
+            draw = ImageDraw.Draw(img)
 
-            bc = Code128(bc_data, writer=writer)
-            bc_file = bc.save(barcode_path)
+            # Генерация штрихкода (без текста)
+            bc = Code128(f"00{sscc}", writer=ImageWriter())
+            bc_img = bc.render({"module_height": 8.0, "quiet_zone": 1.0, "write_text": False})
+
+            # Рассчитываем размеры штрихкода
+            barcode_w = w_px - 2*m_px
+            barcode_h = int(h_px * 0.45)
+            bc_img = bc_img.resize((barcode_w, barcode_h), Image.Resampling.LANCZOS)
+
+            img.paste(bc_img, (m_px, m_px))
+
+            # Текст
+            try:
+                # Попытка найти шрифты (Windows/Linux)
+                font_paths = ["arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]
+                font_path = next((p for p in font_paths if os.path.exists(p)), None)
+                if font_path:
+                    font_bc = ImageFont.truetype(font_path, int(10 * dpi / 72))
+                    font_small = ImageFont.truetype(font_path, int(8 * dpi / 72))
+                else:
+                    font_bc = ImageFont.load_default()
+                    font_small = ImageFont.load_default()
+            except:
+                font_bc = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+
+            # SSCC текст (00)395...
+            sscc_full_text = f"(00){sscc}"
+            draw.text((w_px//2, barcode_h + m_px*3), sscc_full_text, fill="black", font=font_bc, anchor="mt")
+
+            # Дата и Доп. текст
+            draw.text((m_px, barcode_h + m_px*12), f"{t['date']}: {date}", fill="black", font=font_small)
+            if additional_text:
+                draw.text((m_px, barcode_h + m_px*17), additional_text, fill="black", font=font_small)
+
+            img.save(label_path)
 
             # Печать
             if printer:
-                self.print_image_to_win_printer(bc_file, printer, width_mm, height_mm, sscc)
+                self.print_image_to_win_printer(label_path, printer, width_mm, height_mm, sscc)
 
         except Exception as e:
             messagebox.showerror(t["error"], t.get("err_print", "Print error: {}").format(str(e)))
