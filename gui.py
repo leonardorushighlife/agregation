@@ -71,7 +71,7 @@ def load_config():
         "com_enabled": False, "com_port": "", "com_baud": 9600,
         "box_size_fixed": True,
         "conveyor_enabled": False, "conveyor_sscc_file": "",
-        "printer_name": "", "label_width": 58, "label_height": 40,
+        "printer_name": "", "label_width": 50, "label_height": 25,
         "label_additional_text": ""
     }
 
@@ -517,15 +517,20 @@ class App:
             draw = ImageDraw.Draw(img)
 
             # Генерация штрихкода (без текста)
-            bc = Code128(f"00{sscc}", writer=ImageWriter())
+            bc_data = sscc if sscc.startswith("00") else f"00{sscc}"
+            bc = Code128(bc_data, writer=ImageWriter())
             bc_img = bc.render({"module_height": 8.0, "quiet_zone": 1.0, "write_text": False})
 
             # Рассчитываем размеры штрихкода
             barcode_w = w_px - 2*m_px
-            barcode_h = int(h_px * 0.45)
+            barcode_h = int(h_px * 0.40) # Уменьшили до 40% для компактности
             bc_img = bc_img.resize((barcode_w, barcode_h), Image.Resampling.LANCZOS)
 
             img.paste(bc_img, (m_px, m_px))
+
+            # Динамический расчет размера шрифта в зависимости от высоты
+            font_size_bc = max(8, int(h_px * 0.08))
+            font_size_small = max(6, int(h_px * 0.06))
 
             # Текст
             try:
@@ -533,8 +538,8 @@ class App:
                 font_paths = ["arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]
                 font_path = next((p for p in font_paths if os.path.exists(p)), None)
                 if font_path:
-                    font_bc = ImageFont.truetype(font_path, int(10 * dpi / 72))
-                    font_small = ImageFont.truetype(font_path, int(8 * dpi / 72))
+                    font_bc = ImageFont.truetype(font_path, font_size_bc)
+                    font_small = ImageFont.truetype(font_path, font_size_small)
                 else:
                     font_bc = ImageFont.load_default()
                     font_small = ImageFont.load_default()
@@ -543,13 +548,21 @@ class App:
                 font_small = ImageFont.load_default()
 
             # SSCC текст (00)395...
-            sscc_full_text = f"(00){sscc}"
-            draw.text((w_px//2, barcode_h + m_px*3), sscc_full_text, fill="black", font=font_bc, anchor="mt")
+            if sscc.startswith("00"):
+                sscc_full_text = f"({sscc[:2]}){sscc[2:]}"
+            else:
+                sscc_full_text = f"(00){sscc}"
 
-            # Дата и Доп. текст
-            draw.text((m_px, barcode_h + m_px*12), f"{t['date']}: {date}", fill="black", font=font_small)
+            # Позиционирование текста относительно штрихкода
+            y_offset = barcode_h + m_px
+            draw.text((w_px//2, y_offset), sscc_full_text, fill="black", font=font_bc, anchor="mt")
+
+            y_offset += font_size_bc + m_px
+            draw.text((m_px, y_offset), f"{t['date']}: {date}", fill="black", font=font_small)
+
             if additional_text:
-                draw.text((m_px, barcode_h + m_px*17), additional_text, fill="black", font=font_small)
+                y_offset += font_size_small + m_px // 2
+                draw.text((m_px, y_offset), additional_text, fill="black", font=font_small)
 
             img.save(label_path)
 
