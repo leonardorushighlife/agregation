@@ -7,8 +7,13 @@ import socket
 import threading
 from datetime import datetime
 import requests
+import time
 import openpyxl
 from cryptography.fernet import Fernet
+try:
+    from pynput import keyboard
+except:
+    keyboard = None
 
 from i18n import TEXT
 from state import State
@@ -104,6 +109,53 @@ def days_passed(date_str):
     try: return (datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")).days
     except: return 0
 
+class GlobalScannerListener:
+    def __init__(self, callback):
+        self.callback = callback
+        self.buffer = ""
+        self.last_key_time = 0
+        self.key_times = []
+        self.listener = None
+
+    def on_press(self, key):
+        try:
+            current_time = time.time()
+            if hasattr(key, 'char') and key.char:
+                char = key.char
+                self.buffer += char
+                if self.last_key_time > 0:
+                    self.key_times.append(current_time - self.last_key_time)
+                self.last_key_time = current_time
+            elif keyboard and key == keyboard.Key.enter:
+                if self.buffer:
+                    # Проверка скорости ввода (сканеры очень быстрые)
+                    if self.key_times:
+                        avg_time = sum(self.key_times) / len(self.key_times)
+                        if avg_time < 0.05: # Менее 50мс на символ
+                            self.callback(self.buffer)
+
+                    # Очистка для следующего ввода
+                    self.buffer = ""
+                    self.key_times = []
+                    self.last_key_time = 0
+            elif keyboard and key == keyboard.Key.space:
+                self.buffer += " "
+                if self.last_key_time > 0:
+                    self.key_times.append(current_time - self.last_key_time)
+                self.last_key_time = current_time
+        except:
+            pass
+
+    def start(self):
+        if self.listener is None and keyboard:
+            self.listener = keyboard.Listener(on_press=self.on_press)
+            self.listener.start()
+
+    def stop(self):
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+
 class App:
     def __init__(self):
         self.config = load_config()
@@ -140,8 +192,12 @@ class App:
         self.state = State(self.config["box_size"])
         self.agg_mode = "unit" # По умолчанию
         self.paused = False
+        self.scanning_active = False
 
         self.start_serial_reader()
+        self.bg_listener = GlobalScannerListener(lambda b: self.root.after(0, lambda: self.process_barcode(b)))
+        self.bg_listener.start()
+
         self.show_language_screen()
         self.check_recovery()
 
@@ -413,6 +469,17 @@ class App:
         else:
             tk.Entry(scrollable_frame, textvariable=printer_var, width=30).grid(row=row, column=1)
 
+        def open_printer_settings():
+            p_name = printer_var.get()
+            if not p_name: return
+            try:
+                import win32print
+                win32print.PrinterProperties(0, win32print.OpenPrinter(p_name))
+            except Exception as e:
+                messagebox.showerror(t["error"], str(e))
+
+        tk.Button(scrollable_frame, text="⚙", command=open_printer_settings, width=3).grid(row=row, column=2)
+
         row += 1
         lw_e = block(t.get("admin_label_width", "Width (mm)"), self.config.get("label_width", 58), None, row)
         row += 1
@@ -492,7 +559,8 @@ class App:
         return sscc
 
     def generate_and_print_label(self, sscc):
-        t = TEXT[self.lang]
+        # ТЗ: любой текст на этикетке должен быть на Русском языке
+        t_ru = TEXT["ru"]
         width_mm = self.config.get("label_width", 58)
         height_mm = self.config.get("label_height", 40)
         printer = self.config.get("printer_name")
@@ -535,15 +603,25 @@ class App:
             # Текст
             try:
                 # Попытка найти шрифты (Windows/Linux)
-                font_paths = ["arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]
+                font_paths = [
+                    "arial.ttf",
+                    "C:\\Windows\\Fonts\\arial.ttf",
+                    "C:\\Windows\\Fonts\\calibri.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+                ]
                 font_path = next((p for p in font_paths if os.path.exists(p)), None)
                 if font_path:
                     font_bc = ImageFont.truetype(font_path, font_size_bc)
                     font_small = ImageFont.truetype(font_path, font_size_small)
                 else:
+                    # Если шрифт не найден, предупреждаем о проблемах с кириллицей
+                    messagebox.showwarning(TEXT[self.lang]["error"], "Шрифт с поддержкой русского языка не найден. Текст на этикетке может отображаться некорректно.")
                     font_bc = ImageFont.load_default()
                     font_small = ImageFont.load_default()
-            except:
+            except Exception as e:
+                print(f"Font loading error: {e}")
                 font_bc = ImageFont.load_default()
                 font_small = ImageFont.load_default()
 
@@ -558,7 +636,7 @@ class App:
             draw.text((w_px//2, y_offset), sscc_full_text, fill="black", font=font_bc, anchor="mt")
 
             y_offset += font_size_bc + m_px
-            draw.text((m_px, y_offset), f"{t['date']}: {date}", fill="black", font=font_small)
+            draw.text((m_px, y_offset), f"{t_ru['date']}: {date}", fill="black", font=font_small)
 
             if additional_text:
                 y_offset += font_size_small + m_px // 2
@@ -714,6 +792,7 @@ class App:
     def show_scan_screen(self):
         t = TEXT[self.lang]
         self.clear()
+        self.scanning_active = True
         self.info = tk.Label(self.root, font=("Arial", 16), justify="center"); self.info.pack(pady=20)
         if self.config.get("is_server"):
             tk.Label(self.root, text=f"{t['server_ip_label']}: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
@@ -747,6 +826,7 @@ class App:
         t = TEXT[self.lang]
         if self.state.in_box != 0: messagebox.showwarning(t["error"], t["need_close_box"]); return
         if messagebox.askokcancel(t["end_shift"], t["confirm_end"]):
+            self.scanning_active = False
             files = self.perform_save(); self.send_to_telegram(files); self.duplicates.clear_recovery(); self.show_language_screen()
 
     def handle_duplicate_error(self, err_msg, code):
@@ -761,6 +841,7 @@ class App:
         else: messagebox.showerror(t["error"], err_msg)
 
     def process_barcode(self, raw_input):
+        if not self.scanning_active or self.paused: return
         if not raw_input: return
         raw = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
         if self.state.mode == "pallet":

@@ -8,3 +8,4 @@ python-barcode
 reportlab
 pywin32
 Pillow
+pynput
