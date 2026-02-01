@@ -120,21 +120,25 @@ class GlobalScannerListener:
     def on_press(self, key):
         try:
             current_time = time.time()
+            # Если пауза между символами более 200мс, считаем что это новый ввод
+            if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.2):
+                self.buffer = ""
+                self.key_times = []
+
             if hasattr(key, 'char') and key.char:
                 char = key.char
                 self.buffer += char
                 if self.last_key_time > 0:
                     self.key_times.append(current_time - self.last_key_time)
                 self.last_key_time = current_time
-            elif keyboard and key == keyboard.Key.enter:
+            elif keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
                 if self.buffer:
-                    # Проверка скорости ввода (сканеры очень быстрые)
+                    # Проверка скорости ввода
                     if self.key_times:
                         avg_time = sum(self.key_times) / len(self.key_times)
-                        if avg_time < 0.05: # Менее 50мс на символ
+                        if avg_time < 0.1: # Повышаем порог до 100мс для надежности
                             self.callback(self.buffer)
 
-                    # Очистка для следующего ввода
                     self.buffer = ""
                     self.key_times = []
                     self.last_key_time = 0
@@ -263,9 +267,10 @@ class App:
         entry = tk.Entry(win, show="*")
         entry.pack()
 
-        def check():
+        def check(event=None):
             if entry.get() == _d(ADMIN_PASSWORD_OBF):
                 self.password_attempts = 0
+                win.withdraw()
                 win.destroy()
                 self.admin_panel()
             else:
@@ -276,6 +281,7 @@ class App:
                 else:
                     messagebox.showerror(t["error"], t["err_wrong_pass"].format(3 - self.password_attempts))
 
+        entry.bind("<Return>", check)
         tk.Button(win, text=t["login_btn"], command=check).pack(pady=20)
 
     def on_license_blocked(self, msg):
@@ -474,9 +480,16 @@ class App:
             if not p_name: return
             try:
                 import win32print
-                win32print.PrinterProperties(0, win32print.OpenPrinter(p_name))
+                if hasattr(win32print, 'PrinterProperties'):
+                    win32print.PrinterProperties(0, win32print.OpenPrinter(p_name))
+                else:
+                    raise AttributeError("module 'win32print' has no attribute 'PrinterProperties'")
             except Exception as e:
-                messagebox.showerror(t["error"], str(e))
+                try:
+                    import subprocess
+                    subprocess.Popen(['rundll32.exe', 'printui.dll,PrintUIEntry', '/p', '/n', p_name])
+                except:
+                    messagebox.showerror(t["error"], str(e))
 
         tk.Button(scrollable_frame, text="⚙", command=open_printer_settings, width=3).grid(row=row, column=2)
 

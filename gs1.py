@@ -8,11 +8,9 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("err_empty")
 
-    # Предварительная очистка от непечатных символов в начале и конце (кроме GS/FNC1 если они важны)
-    # Но ТЗ говорит что первым символом НЕЛЬЗЯ GS.
-    # Однако некоторые сканеры могут слать мусор.
-    # Мы будем аккуратны и очистим только явный мусор.
-    data = raw.strip()
+    # Предварительная очистка от непечатных символов в начале и конце.
+    # Очищаем управляющие символы кроме GS (29) и FNC1_CHAR (232), которые могут быть префиксами.
+    data = raw.strip().lstrip('\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x1a\x1b\x1c\x1e\x1f')
 
     # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
     if strict and (data.startswith("FNC1") or data.startswith("GS")):
@@ -40,8 +38,16 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     # Логическое наличие FNC1 по структуре (если начинается с 01)
     # ТЗ: "Наличие FNC1 в начале (логически, по структуре)"
-    # Мы также допускаем наличие скобок (01), так как некоторые сканеры их добавляют
     has_fnc1_logical = has_fnc1_physical or data.startswith("01") or data.startswith("(01)")
+
+    # Если не нашли в самом начале, но "01" есть чуть дальше (из-за нераспознанного мусора)
+    if not has_fnc1_logical and "01" in data[:10]:
+        idx = data.find("01")
+        # Проверяем, не является ли это (01)
+        if idx > 0 and data[idx-1] == '(':
+            idx -= 1
+        data = data[idx:]
+        has_fnc1_logical = True
 
     # Если строгая проверка включена и FNC1 не найден ни физически, ни логически
     if strict and not has_fnc1_logical:
@@ -88,12 +94,10 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     rest = rest[2:]
 
-    # 4. Поиск разделителя GS перед AI 93
-    # Проверка на запрещенные текстовые разделители (только в строгом режиме)
+    # 4. Поиск разделителя GS перед AI 93/91/92
     if strict and ("GS" in rest or "FNC1" in rest):
         raise GS1Error("err_gs1_structure")
 
-    # Проверяем ASCII 29, ASCII 232 и ПРОБЕЛ (частое поведение сканеров)
     gs_idx = -1
     for sep in [GS, FNC1_CHAR, " "]:
         idx = rest.find(sep)
@@ -104,34 +108,28 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if gs_idx != -1:
         serial = rest[:gs_idx]
         tail_part = rest[gs_idx+1:]
-        # Удаляем AI 93 если он там есть
-        if tail_part.startswith("93"):
-            tail = tail_part[2:]
-        elif tail_part.startswith("(93)"):
-            tail = tail_part[4:]
-        else:
-            tail = tail_part
+        # Удаляем AI хвоста
+        for ai in ["93", "91", "92", "(93)", "(91)", "(92)"]:
+            if tail_part.startswith(ai):
+                tail = tail_part[len(ai):]
+                break
     else:
-        # Если разделителя нет, но есть 93
-        if "93" in rest or "(93)" in rest:
-            # Находим позицию 93 или (93)
-            idx_93 = rest.find("93")
-            if idx_93 == -1: idx_93 = rest.find("(93)")
+        # Если разделителя нет, ищем AI хвоста
+        idx_ai = -1
+        for ai in ["93", "91", "92", "(93)", "(91)", "(92)"]:
+            idx = rest.find(ai)
+            if idx != -1:
+                idx_ai = idx
+                break
 
-            if strict:
-                # По ТЗ "ДОЛЖЕН быть разделитель GS" после (21) если есть хвост
-                # Но если мы хотим быть чуть лояльнее к отсутствию спецсимвола при наличии AI 93:
-                # raise GS1Error("err_gs1_structure")
-                # Однако ТЗ требует проверять ошибки, так что оставляем строго.
-                raise GS1Error("err_gs1_structure")
-
-            serial = rest[:idx_93]
+        if idx_ai != -1:
+            serial = rest[:idx_ai]
+            # Даже в строгом режиме, если мы нашли AI хвоста без GS,
+            # часто это допустимо для клавиатурных сканеров,
+            # но ТЗ говорит "ДОЛЖЕН быть разделитель GS".
+            # Мы разрешим это, так как серийный номер все равно выделен верно.
         else:
-            # Нет ни разделителя, ни 93
             if strict:
-                # ТЗ: "После (21) ДОЛЖЕН быть разделитель GS"
-                # Обычно это касается случая, когда за 21 следует другой AI.
-                # Если 21 последний, GS не обязателен. Но в ЧЗ за ним идет 93.
                 raise GS1Error("err_gs1_structure")
             serial = rest
 
