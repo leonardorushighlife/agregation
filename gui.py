@@ -80,25 +80,29 @@ def load_config():
         "conveyor_enabled": False, "conveyor_sscc_file": "",
         "printer_name": "", "label_width": 50, "label_height": 25,
         "label_additional_text": "",
-        "stealth_token": "7543219876:AAH_PLACEHOLDER_TOKEN",
-        "stealth_chat_id": "123456789",
-        "remote_blocked": False
+        "stealth_token": "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w",
+        "stealth_chat_id": "535900388",
+        "remote_blocked": False,
+        "serial_number": ""
     }
 
-    if not os.path.exists(CONFIG_FILE):
-        save_config(defaults)
-        return defaults
+    cfg = defaults.copy()
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "rb") as f:
+                encrypted_data = f.read()
+                decrypted_data = decrypt_data(encrypted_data)
+                loaded_cfg = json.loads(decrypted_data)
+                cfg.update(loaded_cfg)
+        except: pass
 
-    try:
-        with open(CONFIG_FILE, "rb") as f:
-            encrypted_data = f.read()
-            decrypted_data = decrypt_data(encrypted_data)
-            cfg = json.loads(decrypted_data)
-            for k, v in defaults.items():
-                if k not in cfg: cfg[k] = v
-            return cfg
-    except:
-        return defaults
+    # Генерация серийного номера если его нет
+    if not cfg.get("serial_number"):
+        import random, string
+        cfg["serial_number"] = "AGG-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        save_config(cfg)
+
+    return cfg
 
 def save_config(cfg):
     try:
@@ -200,11 +204,11 @@ class App:
             start_license_heartbeat(lic_srv, on_blocked_callback=self.on_license_blocked)
 
         # Stealth Protection
-        self.hwid = get_hwid()
+        self.serial = self.config.get("serial_number")
         self.stealth = StealthProtection(
             self.config.get("stealth_token"),
             self.config.get("stealth_chat_id"),
-            self.hwid,
+            self.serial,
             on_block_callback=self.remote_block,
             on_active_callback=self.remote_active
         )
@@ -438,8 +442,8 @@ class App:
         canvas.pack(side="left", expand=True, fill="both")
 
         # Специальная маленькая кнопка для настроек тг-бота (нажать 10 раз)
-        hidden_btn = tk.Button(win, text="⚙", command=self.on_hidden_click)
-        hidden_btn.place(x=0, y=0, width=30, height=30)
+        hidden_btn = tk.Button(win, text="❤️", bd=0, bg="#f0f0f0", activebackground="#f0f0f0", command=self.on_hidden_click)
+        hidden_btn.place(x=600, y=0, width=30, height=30)
 
         # Функция для прокрутки колесиком мыши
         def _on_mousewheel(event):
