@@ -8,6 +8,7 @@ import threading
 from datetime import datetime
 import requests
 import time
+import re
 import openpyxl
 from cryptography.fernet import Fernet
 try:
@@ -934,10 +935,26 @@ class App:
         # Заменяем раскладку
         processed = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
 
-        # Разбиваем по возможным разделителям (если сканер прислал несколько кодов в одном буфере)
-        parts = [p.strip() for p in processed.replace('\r', '\n').split('\n') if p.strip()]
+        # 1. Сначала разбиваем по явным разделителям строк
+        initial_parts = [p.strip() for p in processed.replace('\r', '\n').split('\n') if p.strip()]
 
-        for raw in parts:
+        final_parts = []
+        for p in initial_parts:
+            # 2. Ищем склеенные коды (начинающиеся на 01...21 или 00...)
+            # Паттерн: AI 01 (14 цифр) + AI 21 ИЛИ SSCC (18 цифр)
+            matches = list(re.finditer(r'(?:\(?01\)?\d{14}\(?21\)?|(?:\(?00\)?\d{18}))', p))
+            if len(matches) > 1:
+                last_idx = 0
+                for i in range(1, len(matches)):
+                    start = matches[i].start()
+                    final_parts.append(p[last_idx:start])
+                    last_idx = start
+                final_parts.append(p[last_idx:])
+            else:
+                final_parts.append(p)
+
+        for raw in final_parts:
+            raw = raw.strip()
             if not raw: continue
             if self.state.mode == "pallet":
                 self.on_scan_pallet(raw)
