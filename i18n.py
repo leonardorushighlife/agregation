@@ -139,7 +139,18 @@ TEXT = {
     "fn_prod": "нанесение",
     "fn_all": "ВСЕ",
     "fn_dups": "дубликаты",
-    "fn_part": "часть"
+    "fn_part": "часть",
+    "admin_warehouse_enable": "Включить режим склада",
+    "mode_warehouse": "Склад",
+    "wh_shipment": "Отгрузка",
+    "wh_import": "Импорт",
+    "wh_stock": "Склад / Остатки",
+    "wh_shipment_active": "ОТГРУЗКА АКТИВНА",
+    "wh_scan_sscc": "Сканируйте SSCC для отгрузки",
+    "wh_shipped": "ОТГРУЖЕНО",
+    "wh_stock_units": "Юниты",
+    "wh_stock_boxes": "Короба (Склад/Отгружено)",
+    "wh_stock_pallets": "Палеты (Склад/Отгружено)"
 },
 
 # =======================
@@ -281,7 +292,18 @@ TEXT = {
     "fn_prod": "应用",
     "fn_all": "全部",
     "fn_dups": "重复",
-    "fn_part": "部分"
+    "fn_part": "部分",
+    "admin_warehouse_enable": "启用仓库模式",
+    "mode_warehouse": "仓库",
+    "wh_shipment": "出货",
+    "wh_import": "导入",
+    "wh_stock": "库存",
+    "wh_shipment_active": "出货激活",
+    "wh_scan_sscc": "扫描 SSCC 进行出货",
+    "wh_shipped": "已出货",
+    "wh_stock_units": "单位",
+    "wh_stock_boxes": "箱子 (库存/已出货)",
+    "wh_stock_pallets": "托盘 (库存/已出货)"
 },
 
 # =======================
@@ -423,7 +445,18 @@ TEXT = {
     "fn_prod": "تطبيق",
     "fn_all": "الكل",
     "fn_dups": "مكررات",
-    "fn_part": "جزء"
+    "fn_part": "جزء",
+    "admin_warehouse_enable": "تفعيل وضع المستودع",
+    "mode_warehouse": "مستودع",
+    "wh_shipment": "شحنة",
+    "wh_import": "استيراد",
+    "wh_stock": "مخزون",
+    "wh_shipment_active": "الشحن نشط",
+    "wh_scan_sscc": "امسح SSCC للشحن",
+    "wh_shipped": "تم الشحن",
+    "wh_stock_units": "وحدات",
+    "wh_stock_boxes": "صناديق (مخزون/مشحونة)",
+    "wh_stock_pallets": "منصات (مخزون/مشحونة)"
 },
 
 # =======================
@@ -565,7 +598,18 @@ TEXT = {
     "fn_prod": "nîşankirin",
     "fn_all": "HEMÛ",
     "fn_dups": "dubareyan",
-    "fn_part": "beş"
+    "fn_part": "beş",
+    "admin_warehouse_enable": "Moda depoyê çalak bike",
+    "mode_warehouse": "Depo",
+    "wh_shipment": "Barkirin",
+    "wh_import": "Import",
+    "wh_stock": "Stok",
+    "wh_shipment_active": "BARKIRIN ÇALAK E",
+    "wh_scan_sscc": "Ji bo barkirinê SSCC skan bike",
+    "wh_shipped": "HAT BARKIRIN",
+    "wh_stock_units": "Yekîne",
+    "wh_stock_boxes": "Qutî (Stok/Barkirî)",
+    "wh_stock_pallets": "Palet (Stok/Barkirî)"
 }
 
 }

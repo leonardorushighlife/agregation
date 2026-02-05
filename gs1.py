@@ -1,3 +1,5 @@
+import re
+
 GS = chr(29)        # GS1 group separator (ASCII 29)
 FNC1_CHAR = chr(232) # FNC1 symbol (ASCII 232)
 
@@ -8,9 +10,11 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("err_empty")
 
-    # Предварительная очистка от непечатных символов в начале и конце.
-    # Очищаем управляющие символы кроме GS (29) и FNC1_CHAR (232), которые могут быть префиксами.
-    data = raw.strip().lstrip('\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x1a\x1b\x1c\x1e\x1f')
+    # Предварительная очистка от пробелов и переносов строк в начале и конце.
+    data = raw.strip(' \t\n\r\f\v')
+    # Убираем все непечатаемые символы в начале, кроме GS и FNC1_CHAR.
+    # Мы не убираем GS (29), чтобы потом проверить его наличие в начале (по ТЗ запрещено).
+    data = re.sub(r'^[^\x1d\xe8\x20-\x7e]+', '', data)
 
     # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
     if strict and (data.startswith("FNC1") or data.startswith("GS")):
@@ -41,7 +45,7 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     has_fnc1_logical = has_fnc1_physical or data.startswith("01") or data.startswith("(01)")
 
     # Если не нашли в самом начале, но "01" есть чуть дальше (из-за нераспознанного мусора)
-    if not has_fnc1_logical and "01" in data[:10]:
+    if not has_fnc1_logical and "01" in data[:15]:
         idx = data.find("01")
         # Проверяем, не является ли это (01)
         if idx > 0 and data[idx-1] == '(':

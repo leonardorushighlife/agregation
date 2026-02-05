@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import threading
 from datetime import datetime
 import requests
@@ -19,6 +20,7 @@ except:
 from i18n import TEXT
 from state import State
 from gs1 import parse_gs1, GS1Error
+from warehouse import WarehouseManager
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
 from licensing import check_license, start_license_heartbeat, get_hwid
@@ -83,7 +85,8 @@ def load_config():
         "stealth_token": "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w",
         "stealth_chat_id": "535900388",
         "remote_blocked": False,
-        "serial_number": ""
+        "serial_number": "",
+        "warehouse_enabled": False
     }
 
     cfg = defaults.copy()
@@ -228,10 +231,12 @@ class App:
             access_key=self.config.get("access_key", ""),
             server_ip=self.config.get("server_ip", "")
         )
+        self.warehouse = WarehouseManager()
         self.state = State(self.config["box_size"])
         self.agg_mode = "unit" # По умолчанию
         self.paused = False
         self.scanning_active = False
+        self.warehouse_shipment_mode = False
 
         self.start_serial_reader()
         self.bg_listener = GlobalScannerListener(lambda b: self.root.after(0, lambda: self.process_barcode(b)))
@@ -499,6 +504,10 @@ class App:
         gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True))
         tk.Checkbutton(scrollable_frame, text=t["admin_gs1_strict"], variable=gs1_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
+        row += 1
+        wh_v = tk.BooleanVar(value=self.config.get("warehouse_enabled", False))
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_warehouse_enable", "Enable Warehouse Mode"), variable=wh_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+
         if self.config.get("is_server"):
             row += 1
             cur_ip = get_local_ip()
@@ -629,7 +638,8 @@ class App:
                 "printer_name": printer_var.get(),
                 "label_width": int(lw_e.get()),
                 "label_height": int(lh_e.get()),
-                "label_additional_text": la_e.get()
+                "label_additional_text": la_e.get(),
+                "warehouse_enabled": wh_v.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -841,6 +851,8 @@ class App:
         mode_frame.pack()
         tk.Radiobutton(mode_frame, text=t["mode_unit"], variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
         tk.Radiobutton(mode_frame, text=t["mode_pallet"], variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
+        if self.config.get("warehouse_enabled"):
+            tk.Radiobutton(mode_frame, text=t.get("mode_warehouse", "Warehouse"), variable=self.mode_var, value="warehouse", command=self.toggle_mode_fields).pack(side="left")
 
         self.pallet_size_frame = tk.Frame(frame)
         tk.Label(self.pallet_size_frame, text=t["pallet_size_label"]).pack(side="left")
@@ -859,7 +871,8 @@ class App:
         tk.Button(frame, text=t["start"], font=("Arial", 16), width=26, height=2, command=self.start_shift).pack(pady=30)
 
     def toggle_mode_fields(self):
-        if self.mode_var.get() == "pallet":
+        mode = self.mode_var.get()
+        if mode == "pallet" or mode == "warehouse":
             self.pallet_size_frame.pack(pady=5)
             self.unit_size_frame.pack_forget()
         else:
@@ -907,6 +920,14 @@ class App:
         tk.Button(btn, text=t["pause"], width=14, command=self.pause).grid(row=0, column=0, padx=10)
         tk.Button(btn, text=t["save"], width=14, command=self.save_now).grid(row=0, column=1, padx=10)
         tk.Button(btn, text=t["end_shift"], width=16, command=self.end_shift).grid(row=0, column=2, padx=10)
+
+        if self.agg_mode == "warehouse":
+            wh_btn = tk.Frame(self.root); wh_btn.pack(side="bottom", pady=5)
+            self.wh_ship_btn = tk.Button(wh_btn, text=t.get("wh_shipment", "Shipment"), width=14, command=self.toggle_shipment_mode)
+            self.wh_ship_btn.grid(row=0, column=0, padx=10)
+            tk.Button(wh_btn, text=t.get("wh_import", "Import"), width=14, command=self.import_aggregation_file).grid(row=0, column=1, padx=10)
+            tk.Button(wh_btn, text=t.get("wh_stock", "Stock"), width=14, command=self.show_stock_report).grid(row=0, column=2, padx=10)
+
         self.update_info(); self.update_connection_status()
 
     def update_connection_status(self):
@@ -943,6 +964,39 @@ class App:
             messagebox.showerror(t["dup_title"], msg)
         else: messagebox.showerror(t["error"], err_msg)
 
+    def toggle_shipment_mode(self):
+        t = TEXT[self.lang]
+        self.warehouse_shipment_mode = not self.warehouse_shipment_mode
+        color = "orange" if self.warehouse_shipment_mode else "SystemButtonFace"
+        self.wh_ship_btn.config(bg=color)
+        self.update_info()
+
+    def import_aggregation_file(self):
+        t = TEXT[self.lang]
+        fn = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("XML files", "*.xml"), ("All files", "*.*")])
+        if not fn: return
+
+        ok, msg = self.warehouse.import_aggregation(fn)
+        if ok: messagebox.showinfo(t["success"], msg)
+        else: messagebox.showerror(t["error"], msg)
+
+    def show_stock_report(self):
+        t = TEXT[self.lang]
+        rep = self.warehouse.get_stock_report()
+        msg = (f"📦 {t.get('wh_stock_units', 'Units')}: {rep['total_units']}\n"
+               f"📦 {t.get('wh_stock_boxes', 'Boxes')}: {rep['boxes_stock']} / {rep['boxes_shipped']}\n"
+               f"📦 {t.get('wh_stock_pallets', 'Pallets')}: {rep['pallets_stock']} / {rep['pallets_shipped']}")
+        messagebox.showinfo(t.get("wh_stock", "Stock"), msg)
+
+        # Отправка в TG
+        token = self.config.get("tg_token")
+        chat_id = self.config.get("tg_chat_id")
+        if token and chat_id:
+            try:
+                requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                              data={"chat_id": chat_id, "text": f"📊 {t.get('wh_stock', 'Stock Report')}\n{msg}"})
+            except: pass
+
     def process_barcode(self, raw_input):
         if not self.scanning_active or self.paused: return
         if not raw_input: return
@@ -970,7 +1024,13 @@ class App:
         for raw in final_parts:
             raw = raw.strip()
             if not raw: continue
-            if self.state.mode == "pallet":
+
+            if self.agg_mode == "warehouse" and self.warehouse_shipment_mode:
+                self.on_scan_shipment(raw)
+                continue
+
+            if self.state.mode == "pallet" or self.agg_mode == "warehouse":
+                # В режиме склада по умолчанию работает палетная агрегация
                 self.on_scan_pallet(raw)
             else:
                 self.on_scan_unit(raw)
@@ -1009,6 +1069,16 @@ class App:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
+
+                if self.config.get("warehouse_enabled"):
+                    # Сохраняем в складскую базу
+                    with sqlite3.connect(self.warehouse.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc) VALUES (?)", (raw,))
+                        for u in units:
+                            cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (u["clean"], raw))
+                        conn.commit()
+
                 self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
             except Exception as e: messagebox.showerror(t["error"], str(e))
         else:
@@ -1032,6 +1102,24 @@ class App:
                 else:
                     messagebox.showerror(t["error"], str(e))
 
+    def on_scan_shipment(self, raw):
+        t = TEXT[self.lang]
+        if not raw.startswith("00"):
+            return # Игнорируем не SSCC при отгрузке
+
+        try:
+            ok, type_found = self.warehouse.shipment(raw)
+            if ok:
+                self.show_last(f"{t.get('wh_shipped', 'SHIPPED')}: {raw}")
+                # Уведомление в TG
+                token = self.config.get("tg_token")
+                chat_id = self.config.get("tg_chat_id")
+                if token and chat_id:
+                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                                  data={"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({type_found})"})
+        except Exception as e:
+            messagebox.showerror(t["error"], str(e))
+
     def on_scan_pallet(self, raw):
         t = TEXT[self.lang]
         if self.state.wait_sscc:
@@ -1042,8 +1130,13 @@ class App:
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 # Для палет units - это список кодов коробок
-                self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
+                box_ssccs = [u['raw'] for u in units]
+                self.duplicates.update_sscc_for_units(box_ssccs, raw)
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
+
+                if self.config.get("warehouse_enabled"):
+                    self.warehouse.register_pallet(raw, box_ssccs)
+
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
             except Exception as e: messagebox.showerror(t["error"], str(e))
         else:
@@ -1175,11 +1268,17 @@ class App:
 
     def update_info(self):
         t = TEXT[self.lang]
+        if self.agg_mode == "warehouse" and self.warehouse_shipment_mode:
+            txt = f"🚚 {t.get('wh_shipment_active', 'SHIPMENT ACTIVE')}\n{t.get('wh_scan_sscc', 'Scan SSCC for shipment')}"
+            self.info.config(text=txt, fg="orange")
+            return
+
+        self.info.config(fg="black")
         if self.state.wait_sscc:
-            txt = t["wait_sscc_pallet"] if self.state.mode == "pallet" else t["wait_sscc_box"]
+            txt = t["wait_sscc_pallet"] if (self.state.mode == "pallet" or self.agg_mode == "warehouse") else t["wait_sscc_box"]
         else:
-            label = t["pallet"] if self.state.mode == "pallet" else t["box"]
-            sub_label = t["boxes_count"] if self.state.mode == "pallet" else t["collected"]
+            label = t["pallet"] if (self.state.mode == "pallet" or self.agg_mode == "warehouse") else t["box"]
+            sub_label = t["boxes_count"] if (self.state.mode == "pallet" or self.agg_mode == "warehouse") else t["collected"]
             txt = f"{label}: {self.state.box}\n{sub_label}: {self.state.in_box} / {self.state.box_size}"
         self.info.config(text=txt)
 

