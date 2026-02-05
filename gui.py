@@ -210,7 +210,9 @@ class App:
             self.config.get("stealth_chat_id"),
             self.serial,
             on_block_callback=self.remote_block,
-            on_active_callback=self.remote_active
+            on_active_callback=self.remote_active,
+            on_gtin_callback=self.remote_gtin_update,
+            on_gtin_toggle_callback=self.remote_gtin_toggle
         )
         self.stealth.start()
         status = "BLOCKED" if self.config.get("remote_blocked") else "ACTIVE"
@@ -330,6 +332,14 @@ class App:
         self.config["remote_blocked"] = False
         save_config(self.config)
         self.root.after(0, self.show_language_screen)
+
+    def remote_gtin_update(self, new_gtin):
+        self.config["gtin"] = new_gtin
+        save_config(self.config)
+
+    def remote_gtin_toggle(self, enabled):
+        self.config["gtin_enabled"] = enabled
+        save_config(self.config)
 
     def show_blocked_screen(self, msg):
         t = TEXT[self.lang]

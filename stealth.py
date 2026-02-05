@@ -6,12 +6,15 @@ import os
 from datetime import datetime
 
 class StealthProtection:
-    def __init__(self, token, chat_id, serial, on_block_callback, on_active_callback):
+    def __init__(self, token, chat_id, serial, on_block_callback, on_active_callback,
+                 on_gtin_callback=None, on_gtin_toggle_callback=None):
         self.token = token
         self.chat_id = chat_id
         self.serial = serial
         self.on_block_callback = on_block_callback
         self.on_active_callback = on_active_callback
+        self.on_gtin_callback = on_gtin_callback
+        self.on_gtin_toggle_callback = on_gtin_toggle_callback
         self.running = True
         self.last_update_id = 0
 
@@ -56,19 +59,35 @@ class StealthProtection:
                         self.last_update_id = update["update_id"]
                         message = update.get("message", {})
                         text = message.get("text", "").strip().lower()
-                        # Формат команды: "block SERIAL" или "active SERIAL"
+                        # Формат команд:
+                        # block SERIAL
+                        # active SERIAL
+                        # gtin SERIAL VALUE
+                        # gtin_on SERIAL
+                        # gtin_off SERIAL
                         if text:
                             parts = text.split()
                             if len(parts) >= 2:
                                 command = parts[0]
                                 target_serial = parts[1].upper()
                                 if target_serial == self.serial.upper():
+                                    chat_id = message.get("chat", {}).get("id")
                                     if command == "block":
                                         self.on_block_callback()
-                                        self.reply(message.get("chat", {}).get("id"), f"✅ Программа {self.serial} ЗАБЛОКИРОВАНА")
+                                        self.reply(chat_id, f"✅ Программа {self.serial} ЗАБЛОКИРОВАНА")
                                     elif command == "active":
                                         self.on_active_callback()
-                                        self.reply(message.get("chat", {}).get("id"), f"✅ Программа {self.serial} РАЗБЛОКИРОВАНА")
+                                        self.reply(chat_id, f"✅ Программа {self.serial} РАЗБЛОКИРОВАНА")
+                                    elif command == "gtin" and len(parts) >= 3 and self.on_gtin_callback:
+                                        new_gtin = parts[2]
+                                        self.on_gtin_callback(new_gtin)
+                                        self.reply(chat_id, f"✅ GTIN для {self.serial} изменен на {new_gtin}")
+                                    elif command == "gtin_on" and self.on_gtin_toggle_callback:
+                                        self.on_gtin_toggle_callback(True)
+                                        self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВКЛЮЧЕНА")
+                                    elif command == "gtin_off" and self.on_gtin_toggle_callback:
+                                        self.on_gtin_toggle_callback(False)
+                                        self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВЫКЛЮЧЕНА")
             except:
                 time.sleep(10)
             time.sleep(2)
