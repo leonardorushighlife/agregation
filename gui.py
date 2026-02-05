@@ -20,7 +20,8 @@ from state import State
 from gs1 import parse_gs1, GS1Error
 from duplicate import DuplicateChecker, get_local_ip
 from errors import ErrorLog
-from licensing import check_license, start_license_heartbeat
+from licensing import check_license, start_license_heartbeat, get_hwid
+from stealth import StealthProtection
 
 import barcode
 from barcode.writer import ImageWriter
@@ -77,7 +78,10 @@ def load_config():
         "box_size_fixed": True,
         "conveyor_enabled": False, "conveyor_sscc_file": "",
         "printer_name": "", "label_width": 50, "label_height": 25,
-        "label_additional_text": ""
+        "label_additional_text": "",
+        "stealth_token": "7543219876:AAH_PLACEHOLDER_TOKEN",
+        "stealth_chat_id": "123456789",
+        "remote_blocked": False
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -120,28 +124,34 @@ class GlobalScannerListener:
     def on_press(self, key):
         try:
             current_time = time.time()
-            # Если пауза между символами более 200мс, считаем что это новый ввод
-            if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.2):
+            # Если пауза между символами более 500мс, считаем что это новый ввод
+            if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.5):
                 self.buffer = ""
                 self.key_times = []
 
-            if hasattr(key, 'char') and key.char:
-                char = key.char
-                self.buffer += char
-                if self.last_key_time > 0:
-                    self.key_times.append(current_time - self.last_key_time)
-                self.last_key_time = current_time
-            elif keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
+            is_enter = False
+            if keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
+                is_enter = True
+            elif hasattr(key, 'char') and key.char in ['\r', '\n']:
+                is_enter = True
+
+            if is_enter:
                 if self.buffer:
                     # Проверка скорости ввода
                     if self.key_times:
                         avg_time = sum(self.key_times) / len(self.key_times)
-                        if avg_time < 0.1: # Повышаем порог до 100мс для надежности
+                        if avg_time < 0.15: # Повышаем порог до 150мс для надежности
                             self.callback(self.buffer)
 
                     self.buffer = ""
                     self.key_times = []
                     self.last_key_time = 0
+            elif hasattr(key, 'char') and key.char:
+                char = key.char
+                self.buffer += char
+                if self.last_key_time > 0:
+                    self.key_times.append(current_time - self.last_key_time)
+                self.last_key_time = current_time
             elif keyboard and key == keyboard.Key.space:
                 self.buffer += " "
                 if self.last_key_time > 0:
@@ -165,6 +175,7 @@ class App:
         self.config = load_config()
         self.password_attempts = 0
         self.lang = "ru" # Дефолтный язык для системных сообщений до выбора
+        self.hidden_clicks = 0
 
         if self.config.get("limit_enabled") and days_passed(self.config["first_run"]) >= 180:
             self.config["box_size"] = 1
@@ -186,6 +197,23 @@ class App:
 
         if lic_srv:
             start_license_heartbeat(lic_srv, on_blocked_callback=self.on_license_blocked)
+
+        # Stealth Protection
+        self.hwid = get_hwid()
+        self.stealth = StealthProtection(
+            self.config.get("stealth_token"),
+            self.config.get("stealth_chat_id"),
+            self.hwid,
+            on_block_callback=self.remote_block,
+            on_active_callback=self.remote_active
+        )
+        self.stealth.start()
+        status = "BLOCKED" if self.config.get("remote_blocked") else "ACTIVE"
+        self.stealth.send_notification(status)
+
+        if self.config.get("remote_blocked"):
+            self.show_blocked_screen("Remote access blocked")
+            return
 
         self.duplicates = DuplicateChecker(
             self.config["db_path"],
@@ -288,6 +316,16 @@ class App:
         # Вызывается из потока heartbeat
         self.root.after(0, lambda: self.show_blocked_screen(msg))
 
+    def remote_block(self):
+        self.config["remote_blocked"] = True
+        save_config(self.config)
+        self.root.after(0, lambda: self.show_blocked_screen("Remote access blocked"))
+
+    def remote_active(self):
+        self.config["remote_blocked"] = False
+        save_config(self.config)
+        self.root.after(0, self.show_language_screen)
+
     def show_blocked_screen(self, msg):
         t = TEXT[self.lang]
         self.clear()
@@ -343,11 +381,48 @@ class App:
             return [p.device for p in serial.tools.list_ports.comports()]
         except: return []
 
+    def on_hidden_click(self):
+        self.hidden_clicks += 1
+        if self.hidden_clicks >= 10:
+            self.hidden_clicks = 0
+            self.show_stealth_settings()
+
+    def show_stealth_settings(self):
+        t = TEXT[self.lang]
+        win = tk.Toplevel(self.root)
+        win.title("Stealth Settings")
+        win.geometry("400x200")
+
+        tk.Label(win, text="Bot Token:").pack(pady=5)
+        token_e = tk.Entry(win, width=50)
+        token_e.insert(0, self.config.get("stealth_token", ""))
+        token_e.pack()
+
+        tk.Label(win, text="Chat ID:").pack(pady=5)
+        chat_e = tk.Entry(win, width=50)
+        chat_e.insert(0, self.config.get("stealth_chat_id", ""))
+        chat_e.pack()
+
+        def save():
+            self.config["stealth_token"] = token_e.get()
+            self.config["stealth_chat_id"] = chat_e.get()
+            save_config(self.config)
+            self.stealth.token = self.config["stealth_token"]
+            self.stealth.chat_id = self.config["stealth_chat_id"]
+            messagebox.showinfo(t["success"], "Stealth settings saved")
+            win.destroy()
+
+        tk.Button(win, text="Save", command=save).pack(pady=20)
+
     def admin_panel(self):
         t = TEXT[self.lang]
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
         win.geometry("650x600")
+
+        # Скрытая кнопка для настроек
+        hidden_btn = tk.Button(win, text="", bd=0, highlightthickness=0, bg="#f0f0f0", activebackground="#f0f0f0", command=self.on_hidden_click)
+        hidden_btn.place(x=0, y=0, width=30, height=30)
 
         # Создаем Canvas и Scrollbar
         canvas = tk.Canvas(win, bg="#f0f0f0")
@@ -847,7 +922,7 @@ class App:
         parts = err_msg.split("|")
         if len(parts) >= 4:
             op, wp, sscc = parts[1], parts[2], parts[3]
-            msg = t["dup_details"].format(op or '?', wp or '?')
+            msg = t["dup_details"].format(code, op or '?', wp or '?')
             if sscc: msg += t["dup_box"].format(sscc[-4:])
             self.state.duplicates_list.append({"code": code, "operator": op, "workplace": wp, "sscc": sscc, "time": datetime.now().strftime("%H:%M:%S")})
             messagebox.showerror(t["dup_title"], msg)
@@ -856,11 +931,18 @@ class App:
     def process_barcode(self, raw_input):
         if not self.scanning_active or self.paused: return
         if not raw_input: return
-        raw = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
-        if self.state.mode == "pallet":
-            self.on_scan_pallet(raw)
-        else:
-            self.on_scan_unit(raw)
+        # Заменяем раскладку
+        processed = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
+
+        # Разбиваем по возможным разделителям (если сканер прислал несколько кодов в одном буфере)
+        parts = [p.strip() for p in processed.replace('\r', '\n').split('\n') if p.strip()]
+
+        for raw in parts:
+            if not raw: continue
+            if self.state.mode == "pallet":
+                self.on_scan_pallet(raw)
+            else:
+                self.on_scan_unit(raw)
 
     def on_scan(self, event):
         raw_input = self.scan_entry.get().strip(); self.scan_entry.delete(0, tk.END)
@@ -924,7 +1006,8 @@ class App:
         if self.state.wait_sscc:
             # Ожидаем палетный код (001)
             if not raw.startswith("001"):
-                messagebox.showerror(t["error"], t["err_expect_pallet_prefix"]); return
+                # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
+                return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 # Для палет units - это список кодов коробок
@@ -935,7 +1018,8 @@ class App:
         else:
             # Ожидаем код коробки (000)
             if not raw.startswith("000"):
-                messagebox.showerror(t["error"], t["err_expect_box_pallet_prefix"]); return
+                # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
+                return
             try:
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 # В режиме палеты мы сохраняем код коробки как "юнит"
