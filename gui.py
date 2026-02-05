@@ -421,10 +421,6 @@ class App:
         win.title(t["admin_panel_title"])
         win.geometry("650x600")
 
-        # Скрытая кнопка для настроек
-        hidden_btn = tk.Button(win, text="", bd=0, highlightthickness=0, bg="#f0f0f0", activebackground="#f0f0f0", command=self.on_hidden_click)
-        hidden_btn.place(x=0, y=0, width=30, height=30)
-
         # Создаем Canvas и Scrollbar
         canvas = tk.Canvas(win, bg="#f0f0f0")
         scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
@@ -440,6 +436,10 @@ class App:
 
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", expand=True, fill="both")
+
+        # Специальная маленькая кнопка для настроек тг-бота (нажать 10 раз)
+        hidden_btn = tk.Button(win, text="⚙", command=self.on_hidden_click)
+        hidden_btn.place(x=0, y=0, width=30, height=30)
 
         # Функция для прокрутки колесиком мыши
         def _on_mousewheel(event):
