@@ -149,6 +149,26 @@ class WarehouseManager:
             cursor.execute("INSERT INTO wh_boxes (sscc, status, ship_time) VALUES (?, 'shipped', ?)", (sscc, now))
             return True, "box_new"
 
+    def return_item(self, sscc):
+        """Возврат палеты или короба"""
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+
+            # Проверяем, палета ли это
+            cursor.execute("SELECT sscc FROM wh_pallets WHERE sscc = ?", (sscc,))
+            if cursor.fetchone():
+                cursor.execute("UPDATE wh_pallets SET status = 'in_stock', ship_time = NULL WHERE sscc = ?", (sscc,))
+                cursor.execute("UPDATE wh_boxes SET status = 'in_stock', ship_time = NULL WHERE pallet_sscc = ?", (sscc,))
+                return True, "pallet"
+
+            # Иначе проверяем, короб ли это
+            cursor.execute("SELECT sscc FROM wh_boxes WHERE sscc = ?", (sscc,))
+            if cursor.fetchone():
+                cursor.execute("UPDATE wh_boxes SET status = 'in_stock', ship_time = NULL WHERE sscc = ?", (sscc,))
+                return True, "box"
+
+            return False, "not_found"
+
     def get_stock_report(self):
         """Статистика остатков"""
         with sqlite3.connect(self.db_path, timeout=10) as conn:

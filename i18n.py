@@ -155,6 +155,7 @@ TEXT = {
     "mode_acceptance": "Агрегация/Приемка",
     "mode_unit_acc": "Агрегация (Юниты)",
     "mode_shipment": "Отгрузка",
+    "mode_return": "Возврат",
     "btn_partial_pallet": "Собрать полупалет",
     "lbl_order_select": "Выберите заказ",
     "report_shipment_tg": "📦 Склад: Отгрузка {0}\n🕒 Время: {1}\n🔢 Кол-во: {2}",
@@ -162,7 +163,10 @@ TEXT = {
     "wh_acceptance": "Приемка",
     "wh_shipment_label": "Отгрузка",
     "err_no_order": "Сначала выберите заказ!",
-    "wh_stock_movement": "Движение товара"
+    "wh_stock_movement": "Движение товара",
+    "wh_return_mode": "РЕЖИМ ВОЗВРАТА",
+    "wh_scan_return": "Сканируйте SSCC для возврата",
+    "wh_returned": "ВОЗВРАЩЕНО"
 },
 
 # =======================
@@ -315,7 +319,11 @@ TEXT = {
     "wh_shipped": "已出货",
     "wh_stock_units": "单位",
     "wh_stock_boxes": "箱子 (库存/已出货)",
-    "wh_stock_pallets": "托盘 (库存/已出货)"
+    "wh_stock_pallets": "托盘 (库存/已出货)",
+    "wh_return_mode": "退货模式",
+    "wh_scan_return": "扫描 SSCC 进行退货",
+    "wh_returned": "已退回",
+    "mode_return": "退货"
 },
 
 # =======================
@@ -468,7 +476,11 @@ TEXT = {
     "wh_shipped": "تم الشحن",
     "wh_stock_units": "وحدات",
     "wh_stock_boxes": "صناديق (مخزون/مشحونة)",
-    "wh_stock_pallets": "منصات (مخزون/مشحونة)"
+    "wh_stock_pallets": "منصات (مخزون/مشحونة)",
+    "wh_return_mode": "وضع الارجاع",
+    "wh_scan_return": "امسح SSCC للإرجاع",
+    "wh_returned": "تم الإرجاع",
+    "mode_return": "إرجاع"
 },
 
 # =======================
@@ -621,7 +633,11 @@ TEXT = {
     "wh_shipped": "HAT BARKIRIN",
     "wh_stock_units": "Yekîne",
     "wh_stock_boxes": "Qutî (Stok/Barkirî)",
-    "wh_stock_pallets": "Palet (Stok/Barkirî)"
+    "wh_stock_pallets": "Palet (Stok/Barkirî)",
+    "wh_return_mode": "MODA VEGERANDINÊ",
+    "wh_scan_return": "Ji bo vegerandinê SSCC skan bike",
+    "wh_returned": "HATE VEGERANDIN",
+    "mode_return": "Vegerandin"
 }
 
 }

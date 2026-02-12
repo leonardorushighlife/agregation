@@ -17,6 +17,12 @@ try:
 except:
     keyboard = None
 
+try:
+    import cv2
+    from pylibdmtx.pylibdmtx import decode
+except:
+    cv2 = None
+
 from i18n import TEXT
 from state import State
 from gs1 import parse_gs1, GS1Error
@@ -88,7 +94,9 @@ def load_config():
         "serial_number": "",
         "warehouse_enabled": False,
         "backup_path": "output/backup",
-        "pallet_sscc_file": ""
+        "pallet_sscc_file": "",
+        "cv_mode_enabled": False,
+        "camera_id": 0
     }
 
     cfg = defaults.copy()
@@ -124,8 +132,9 @@ def days_passed(date_str):
     except: return 0
 
 class GlobalScannerListener:
-    def __init__(self, callback):
+    def __init__(self, callback, space_callback=None):
         self.callback = callback
+        self.space_callback = space_callback
         self.buffer = ""
         self.last_key_time = 0
         self.key_times = []
@@ -163,10 +172,13 @@ class GlobalScannerListener:
                     self.key_times.append(current_time - self.last_key_time)
                 self.last_key_time = current_time
             elif keyboard and key == keyboard.Key.space:
-                self.buffer += " "
-                if self.last_key_time > 0:
-                    self.key_times.append(current_time - self.last_key_time)
-                self.last_key_time = current_time
+                if self.space_callback:
+                    self.space_callback()
+                else:
+                    self.buffer += " "
+                    if self.last_key_time > 0:
+                        self.key_times.append(current_time - self.last_key_time)
+                    self.last_key_time = current_time
         except:
             pass
 
@@ -244,7 +256,10 @@ class App:
         self.current_order = None
 
         self.start_serial_reader()
-        self.bg_listener = GlobalScannerListener(lambda b: self.root.after(0, lambda: self.process_barcode(b)))
+        self.bg_listener = GlobalScannerListener(
+            lambda b: self.root.after(0, lambda: self.process_barcode(b)),
+            space_callback=self.on_space_pressed
+        )
         self.bg_listener.start()
 
         self.show_language_screen()
@@ -536,6 +551,13 @@ class App:
         tk.Checkbutton(scrollable_frame, text=t.get("admin_warehouse_enable", "Enable Warehouse Mode"), variable=wh_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
         row += 1
+        cv_v = tk.BooleanVar(value=self.config.get("cv_mode_enabled", False))
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_cv_enable", "Enable Machine Vision"), variable=cv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+
+        row += 1
+        cam_e = block("Camera ID", self.config.get("camera_id", 0), None, row)
+
+        row += 1
         bp_e = block("Backup Path", self.config.get("backup_path", "output/backup"), None, row)
 
         if self.config.get("is_server"):
@@ -695,7 +717,9 @@ class App:
                 "label_height": int(lh_e.get()),
                 "label_additional_text": la_e.get(),
                 "warehouse_enabled": wh_v.get(),
-                "backup_path": bp_e.get()
+                "backup_path": bp_e.get(),
+                "cv_mode_enabled": cv_v.get(),
+                "camera_id": int(cam_e.get() or 0)
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -944,6 +968,7 @@ class App:
             tk.Radiobutton(mode_frame, text=t.get("mode_unit_acc", "Units"), variable=self.mode_var, value="warehouse_unit_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_acceptance"], variable=self.mode_var, value="warehouse_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_shipment"], variable=self.mode_var, value="warehouse_ship", command=self.toggle_mode_fields).pack(side="left")
+            tk.Radiobutton(mode_frame, text=t.get("mode_return", "Return"), variable=self.mode_var, value="warehouse_return", command=self.toggle_mode_fields).pack(side="left")
         else:
             tk.Label(frame, text=t["agg_mode_label"], font=("Arial", 10, "bold")).pack(pady=(10, 0))
             self.mode_var = tk.StringVar(value="unit")
@@ -998,6 +1023,12 @@ class App:
             self.warehouse_shipment_mode = True
             # Нам нужно выбрать заказ
             self.select_order_dialog()
+            return
+
+        if self.agg_mode == "warehouse_return":
+            self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
+            self.state.reset(0, mode="return")
+            self.show_scan_screen()
             return
 
         size = int(self.config["box_size"])
@@ -1242,11 +1273,15 @@ class App:
             raw = raw.strip()
             if not raw: continue
 
-            if self.agg_mode == "warehouse" and self.warehouse_shipment_mode:
+            if self.agg_mode == "warehouse_return":
+                self.on_scan_return(raw)
+                continue
+
+            if self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
                 self.on_scan_shipment(raw)
                 continue
 
-            if self.state.mode == "pallet" or self.agg_mode == "warehouse":
+            if self.state.mode == "pallet" or self.agg_mode == "warehouse_acc":
                 # В режиме склада по умолчанию работает палетная агрегация
                 self.on_scan_pallet(raw)
             else:
@@ -1323,6 +1358,82 @@ class App:
                     self.handle_duplicate_error(str(e), raw)
                 else:
                     messagebox.showerror(t["error"], str(e))
+
+    def on_space_pressed(self):
+        if self.config.get("cv_mode_enabled") and self.scanning_active and not self.paused:
+            self.root.after(0, self.toggle_cv_scanner)
+
+    def toggle_cv_scanner(self):
+        if hasattr(self, "cv_active") and self.cv_active:
+            self.cv_active = False
+        else:
+            self.start_cv_scanner()
+
+    def start_cv_scanner(self):
+        if not cv2:
+            t = TEXT[self.lang]
+            messagebox.showerror(t["error"], "OpenCV/pylibdmtx not installed")
+            return
+
+        self.cv_active = True
+        self.cv_thread = threading.Thread(target=self._cv_loop, daemon=True)
+        self.cv_thread.start()
+
+    def _cv_loop(self):
+        cam_id = self.config.get("camera_id", 0)
+        cap = cv2.VideoCapture(cam_id)
+        last_found = ""
+        last_found_time = 0
+
+        while self.cv_active:
+            ret, frame = cap.read()
+            if not ret: break
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            codes = decode(gray, timeout=50)
+
+            for code in codes:
+                data = code.data.decode('utf-8')
+                (x, y, w, h) = code.rect
+
+                # Анти-дребезг (не сканировать одно и то же чаще чем раз в 2 сек)
+                if data != last_found or (time.time() - last_found_time > 2):
+                    last_found = data
+                    last_found_time = time.time()
+                    self.root.after(0, lambda d=data: self.process_barcode(d))
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
+                else:
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
+
+            cv2.imshow("Machine Vision - PRESS SPACE TO CLOSE", frame)
+            if cv2.waitKey(1) & 0xFF == ord(' '):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+        self.cv_active = False
+
+    def on_scan_return(self, raw):
+        t = TEXT[self.lang]
+        if not raw.startswith("00"):
+            return
+
+        try:
+            ok, item_type = self.warehouse.return_item(raw)
+            if ok:
+                self.warehouse.record_history(raw, item_type, "returned")
+                self.show_last(f"{t.get('wh_returned', 'RETURNED')}: {raw}")
+
+                # Уведомление в TG
+                token = self.config.get("tg_token")
+                chat_id = self.config.get("tg_chat_id")
+                if token and chat_id:
+                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                                  data={"chat_id": chat_id, "text": f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})"})
+            else:
+                messagebox.showwarning(t["error"], t.get("err_not_found", "Item not found in database"))
+        except Exception as e:
+            messagebox.showerror(t["error"], str(e))
 
     def on_scan_shipment(self, raw):
         t = TEXT[self.lang]
@@ -1527,6 +1638,11 @@ class App:
 
     def update_info(self):
         t = TEXT[self.lang]
+        if self.agg_mode == "warehouse_return":
+            txt = f"🔄 {t.get('wh_return_mode', 'RETURN MODE')}\n{t.get('wh_scan_return', 'Scan SSCC for return')}"
+            self.info.config(text=txt, fg="blue")
+            return
+
         if self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
             o = getattr(self, "current_order_data", None)
             if o:

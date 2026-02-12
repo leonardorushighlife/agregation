@@ -12,9 +12,15 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
 
     # Предварительная очистка от пробелов и переносов строк в начале и конце.
     data = raw.strip(' \t\n\r\f\v')
+
+    # ТЗ: "НЕЛЬЗЯ чтобы первым символом был GS" (ASCII 29)
+    # Проверяем на физический GS до очистки
+    if strict and data.startswith(GS):
+        raise GS1Error("err_gs1_structure")
+
     # Убираем все непечатаемые символы в начале, кроме GS и FNC1_CHAR.
-    # Мы не убираем GS (29), чтобы потом проверить его наличие в начале (по ТЗ запрещено).
-    data = re.sub(r'^[^\x1d\xe8\x20-\x7e]+', '', data)
+    # Оставляем цифры, скобки, AIM ID префикс ']'.
+    data = re.sub(r'^[^\w\]\(\x1d\xe8]+', '', data)
 
     # Проверка на запрещенные текстовые префиксы (только в строгом режиме)
     if strict and (data.startswith("FNC1") or data.startswith("GS")):
@@ -34,9 +40,7 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
             has_fnc1_physical = True
             data = data[1:]
         elif data.startswith(GS):
-            # ТЗ: "НЕЛЬЗЯ чтобы первым символом был GS" (ASCII 29)
-            if strict:
-                raise GS1Error("err_gs1_structure")
+            # В нестрогом режиме или если GS не первый символ после очистки
             has_fnc1_physical = True
             data = data[1:]
 
@@ -44,14 +48,13 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     # ТЗ: "Наличие FNC1 в начале (логически, по структуре)"
     has_fnc1_logical = has_fnc1_physical or data.startswith("01") or data.startswith("(01)")
 
-    # Если не нашли в самом начале, но "01" есть чуть дальше (из-за нераспознанного мусора)
-    if not has_fnc1_logical and "01" in data[:15]:
-        idx = data.find("01")
-        # Проверяем, не является ли это (01)
-        if idx > 0 and data[idx-1] == '(':
-            idx -= 1
-        data = data[idx:]
-        has_fnc1_logical = True
+    # Более гибкий поиск 01 в начале, если не нашли сразу
+    if not has_fnc1_logical:
+        # Ищем 01 или (01) в первых 15 символах
+        match_01 = re.search(r'\(?01\)?', data[:15])
+        if match_01:
+            data = data[match_01.start():]
+            has_fnc1_logical = True
 
     # Если строгая проверка включена и FNC1 не найден ни физически, ни логически
     if strict and not has_fnc1_logical:
