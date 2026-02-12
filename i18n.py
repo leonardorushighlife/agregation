@@ -152,6 +152,7 @@ TEXT = {
     "wh_stock_boxes": "Короба (Склад/Отгружено)",
     "wh_stock_pallets": "Палеты (Склад/Отгружено)",
     "mode_acceptance": "Агрегация/Приемка",
+    "mode_unit_acc": "Агрегация (Юниты)",
     "mode_shipment": "Отгрузка",
     "btn_partial_pallet": "Собрать полупалет",
     "lbl_order_select": "Выберите заказ",

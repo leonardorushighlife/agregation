@@ -842,6 +842,10 @@ class App:
     def show_shift_form(self):
         self.clear()
         t = TEXT[self.lang]
+
+        # Кнопка настроек в углу (всегда доступна в режиме склада)
+        tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680, y=10, width=30, height=30)
+
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
 
@@ -861,6 +865,7 @@ class App:
             self.mode_var = tk.StringVar(value="warehouse_acc")
             mode_frame = tk.Frame(frame)
             mode_frame.pack()
+            tk.Radiobutton(mode_frame, text=t.get("mode_unit_acc", "Units"), variable=self.mode_var, value="warehouse_unit_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_acceptance"], variable=self.mode_var, value="warehouse_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_shipment"], variable=self.mode_var, value="warehouse_ship", command=self.toggle_mode_fields).pack(side="left")
         else:
@@ -889,18 +894,21 @@ class App:
 
     def toggle_mode_fields(self):
         mode = self.mode_var.get()
-        if mode == "pallet" or mode == "warehouse" or mode == "warehouse_acc":
+        if mode in ["pallet", "warehouse", "warehouse_acc"]:
             self.pallet_size_frame.pack(pady=5)
             if mode == "warehouse_acc":
                 self.entry_pallet_size.delete(0, tk.END)
                 self.entry_pallet_size.insert(0, "110")
             self.unit_size_frame.pack_forget()
-        else:
+        elif mode in ["unit", "warehouse_unit_acc"]:
             self.pallet_size_frame.pack_forget()
             if not self.config.get("box_size_fixed", True):
                 self.unit_size_frame.pack(pady=5)
             else:
                 self.unit_size_frame.pack_forget()
+        else:
+            self.pallet_size_frame.pack_forget()
+            self.unit_size_frame.pack_forget()
 
     def start_shift(self):
         t = TEXT[self.lang]
@@ -922,7 +930,7 @@ class App:
                 size = int(self.entry_pallet_size.get())
             except:
                 messagebox.showerror(t["error"], t["pallet_size_label"]); return
-        else:
+        elif self.agg_mode in ["unit", "warehouse_unit_acc"]:
             if not self.config.get("box_size_fixed", True):
                 try:
                     size = int(self.entry_unit_size.get())
@@ -931,7 +939,10 @@ class App:
 
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
         # В режиме warehouse_acc мы агрегируем короба в палеты
-        effective_mode = "pallet" if self.agg_mode == "warehouse_acc" else self.agg_mode
+        effective_mode = self.agg_mode
+        if self.agg_mode == "warehouse_acc": effective_mode = "pallet"
+        if self.agg_mode == "warehouse_unit_acc": effective_mode = "unit"
+
         self.state.reset(size, mode=effective_mode)
         self.show_scan_screen()
 
@@ -1176,6 +1187,7 @@ class App:
                         for u in units:
                             cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (u["clean"], raw))
                         conn.commit()
+                    self.warehouse.record_history(raw, "box", "received")
 
                 self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
             except Exception as e: messagebox.showerror(t["error"], str(e))
@@ -1188,6 +1200,10 @@ class App:
                     raise Exception(t["err_gtin"])
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 res = self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
+
+                if self.config.get("warehouse_enabled"):
+                    self.warehouse.record_history(parsed["clean"], "unit", "received")
+
                 if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
                     self.root.after(500, self.trigger_conveyor_auto_sscc)
             except GS1Error as e:
@@ -1231,8 +1247,8 @@ class App:
     def on_scan_pallet(self, raw):
         t = TEXT[self.lang]
         if self.state.wait_sscc:
-            # Ожидаем палетный код (001)
-            if not raw.startswith("001"):
+            # Ожидаем палетный код (начинается на 00)
+            if not raw.startswith("00"):
                 # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
                 return
             try:
@@ -1249,8 +1265,8 @@ class App:
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
             except Exception as e: messagebox.showerror(t["error"], str(e))
         else:
-            # Ожидаем код коробки (000)
-            if not raw.startswith("000"):
+            # Ожидаем код коробки (начинается на 00)
+            if not raw.startswith("00"):
                 # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
                 return
             try:
