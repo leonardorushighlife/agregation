@@ -87,7 +87,8 @@ def load_config():
         "remote_blocked": False,
         "serial_number": "",
         "warehouse_enabled": False,
-        "backup_path": "output/backup"
+        "backup_path": "output/backup",
+        "pallet_sscc_file": ""
     }
 
     cfg = defaults.copy()
@@ -569,6 +570,14 @@ class App:
             if fn: sscc_file_var.set(fn)
         tk.Button(scrollable_frame, text=t.get("admin_btn_browse", "Browse"), command=browse_sscc).grid(row=row, column=2)
         row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_pallet_sscc_file", "Pallet SSCC File"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        pallet_sscc_file_var = tk.StringVar(value=self.config.get("pallet_sscc_file", ""))
+        tk.Entry(scrollable_frame, textvariable=pallet_sscc_file_var, width=30).grid(row=row, column=1)
+        def browse_pallet_sscc():
+            fn = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+            if fn: pallet_sscc_file_var.set(fn)
+        tk.Button(scrollable_frame, text=t.get("admin_btn_browse", "Browse"), command=browse_pallet_sscc).grid(row=row, column=2)
+        row += 1
         tk.Label(scrollable_frame, text=t.get("admin_printer", "Printer"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
         printer_var = tk.StringVar(value=self.config.get("printer_name", ""))
         # Попытка получить список принтеров если мы на Windows
@@ -645,6 +654,7 @@ class App:
                 "box_size_fixed": box_v.get(),
                 "conveyor_enabled": conv_v.get(),
                 "conveyor_sscc_file": sscc_file_var.get(),
+                "pallet_sscc_file": pallet_sscc_file_var.get(),
                 "printer_name": printer_var.get(),
                 "label_width": int(lw_e.get()),
                 "label_height": int(lh_e.get()),
@@ -661,11 +671,11 @@ class App:
 
         tk.Button(scrollable_frame, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
 
-    def get_next_sscc_from_file(self):
+    def get_next_sscc_from_file(self, path_key="conveyor_sscc_file"):
         t = TEXT[self.lang]
-        path = self.config.get("conveyor_sscc_file")
+        path = self.config.get(path_key)
         if not path or not os.path.exists(path):
-            raise Exception("SSCC file not found")
+            raise Exception(f"SSCC file not found: {path_key}")
 
         with open(path, "r") as f:
             lines = [l.strip() for l in f.readlines() if l.strip()]
@@ -811,12 +821,43 @@ class App:
     def trigger_conveyor_auto_sscc(self):
         t = TEXT[self.lang]
         try:
-            sscc = self.get_next_sscc_from_file()
+            sscc = self.get_next_sscc_from_file("conveyor_sscc_file")
             self.duplicates.check_sscc(sscc)
             units = self.state.scan_sscc(sscc)
             self.duplicates.update_sscc_for_units([u['raw'] for u in units], sscc)
             self.duplicates.save_box_to_recovery(sscc, units, self.shift_info)
+
+            if self.config.get("warehouse_enabled"):
+                # Сохраняем в складскую базу
+                with sqlite3.connect(self.warehouse.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc) VALUES (?)", (sscc,))
+                    for u in units:
+                        cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (u["clean"], sscc))
+                    conn.commit()
+                self.warehouse.record_history(sscc, "box", "received")
+
             self.show_last(f"{t['closed_box']}{sscc}")
+            self.update_info()
+            self.generate_and_print_label(sscc)
+        except Exception as e:
+            messagebox.showerror(t["error"], str(e))
+
+    def trigger_pallet_auto_sscc(self):
+        t = TEXT[self.lang]
+        try:
+            sscc = self.get_next_sscc_from_file("pallet_sscc_file")
+            self.duplicates.check_sscc(sscc)
+            units = self.state.scan_sscc(sscc) # Здесь units - это список коробок
+            box_ssccs = [u['raw'] for u in units]
+            self.duplicates.update_sscc_for_units(box_ssccs, sscc)
+            self.duplicates.save_box_to_recovery(sscc, units, self.shift_info)
+
+            if self.config.get("warehouse_enabled"):
+                self.warehouse.register_pallet(sscc, box_ssccs)
+                self.warehouse.record_history(sscc, "pallet", "received")
+
+            self.show_last(f"{t['closed_pallet']}{sscc}")
             self.update_info()
             self.generate_and_print_label(sscc)
         except Exception as e:
@@ -1060,7 +1101,14 @@ class App:
         if not messagebox.askyesno(t["pallet"], t["btn_partial_pallet"] + "?"): return
 
         # Принудительно вызываем завершение палеты
-        self.trigger_conveyor_auto_sscc()
+        if self.config.get("conveyor_enabled"):
+            if self.agg_mode == "warehouse_acc" or self.state.mode == "pallet":
+                self.trigger_pallet_auto_sscc()
+            else:
+                self.trigger_conveyor_auto_sscc()
+        else:
+            # Если авто-режим выключен, просто ждем скана кода палеты (существующая логика)
+            pass
 
     def handle_duplicate_error(self, err_msg, code):
         t = TEXT[self.lang]
@@ -1281,8 +1329,10 @@ class App:
                 self.show_last(f"{t['added_box']}{raw}"); self.update_info()
 
                 # Если достигли 110 (или другого лимита), автоматически закрываем
-                if res == "WAIT_SSCC":
-                    if self.agg_mode == "warehouse_acc" or self.config.get("conveyor_enabled"):
+                if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
+                    if self.agg_mode == "warehouse_acc":
+                        self.root.after(500, self.trigger_pallet_auto_sscc)
+                    else:
                         self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
