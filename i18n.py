@@ -150,7 +150,17 @@ TEXT = {
     "wh_shipped": "ОТГРУЖЕНО",
     "wh_stock_units": "Юниты",
     "wh_stock_boxes": "Короба (Склад/Отгружено)",
-    "wh_stock_pallets": "Палеты (Склад/Отгружено)"
+    "wh_stock_pallets": "Палеты (Склад/Отгружено)",
+    "mode_acceptance": "Агрегация/Приемка",
+    "mode_shipment": "Отгрузка",
+    "btn_partial_pallet": "Собрать полупалет",
+    "lbl_order_select": "Выберите заказ",
+    "report_shipment_tg": "📦 Склад: Отгрузка {0}\n🕒 Время: {1}\n🔢 Кол-во: {2}",
+    "wh_order": "Заказ",
+    "wh_acceptance": "Приемка",
+    "wh_shipment_label": "Отгрузка",
+    "err_no_order": "Сначала выберите заказ!",
+    "wh_stock_movement": "Движение товара"
 },
 
 # =======================

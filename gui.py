@@ -86,7 +86,8 @@ def load_config():
         "stealth_chat_id": "535900388",
         "remote_blocked": False,
         "serial_number": "",
-        "warehouse_enabled": False
+        "warehouse_enabled": False,
+        "backup_path": "output/backup"
     }
 
     cfg = defaults.copy()
@@ -215,7 +216,8 @@ class App:
             on_block_callback=self.remote_block,
             on_active_callback=self.remote_active,
             on_gtin_callback=self.remote_gtin_update,
-            on_gtin_toggle_callback=self.remote_gtin_toggle
+            on_gtin_toggle_callback=self.remote_gtin_toggle,
+            on_order_callback=lambda num: self.warehouse.add_order(num)
         )
         self.stealth.start()
         status = "BLOCKED" if self.config.get("remote_blocked") else "ACTIVE"
@@ -237,6 +239,7 @@ class App:
         self.paused = False
         self.scanning_active = False
         self.warehouse_shipment_mode = False
+        self.current_order = None
 
         self.start_serial_reader()
         self.bg_listener = GlobalScannerListener(lambda b: self.root.after(0, lambda: self.process_barcode(b)))
@@ -274,6 +277,10 @@ class App:
             w.destroy()
 
     def show_language_screen(self):
+        if self.config.get("warehouse_enabled"):
+            self.set_language("ru")
+            return
+
         self.clear()
         # Попытка определить текущий язык или оставить RU по умолчанию
         lang = getattr(self, "lang", "ru")
@@ -508,6 +515,9 @@ class App:
         wh_v = tk.BooleanVar(value=self.config.get("warehouse_enabled", False))
         tk.Checkbutton(scrollable_frame, text=t.get("admin_warehouse_enable", "Enable Warehouse Mode"), variable=wh_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
 
+        row += 1
+        bp_e = block("Backup Path", self.config.get("backup_path", "output/backup"), None, row)
+
         if self.config.get("is_server"):
             row += 1
             cur_ip = get_local_ip()
@@ -639,7 +649,8 @@ class App:
                 "label_width": int(lw_e.get()),
                 "label_height": int(lh_e.get()),
                 "label_additional_text": la_e.get(),
-                "warehouse_enabled": wh_v.get()
+                "warehouse_enabled": wh_v.get(),
+                "backup_path": bp_e.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
@@ -845,14 +856,20 @@ class App:
         self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
 
         # Выбор режима агрегации
-        tk.Label(frame, text=t["agg_mode_label"], font=("Arial", 10, "bold")).pack(pady=(10, 0))
-        self.mode_var = tk.StringVar(value="unit")
-        mode_frame = tk.Frame(frame)
-        mode_frame.pack()
-        tk.Radiobutton(mode_frame, text=t["mode_unit"], variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
-        tk.Radiobutton(mode_frame, text=t["mode_pallet"], variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
         if self.config.get("warehouse_enabled"):
-            tk.Radiobutton(mode_frame, text=t.get("mode_warehouse", "Warehouse"), variable=self.mode_var, value="warehouse", command=self.toggle_mode_fields).pack(side="left")
+            tk.Label(frame, text=t.get("wh_stock_movement", "Warehouse Mode"), font=("Arial", 10, "bold")).pack(pady=(10, 0))
+            self.mode_var = tk.StringVar(value="warehouse_acc")
+            mode_frame = tk.Frame(frame)
+            mode_frame.pack()
+            tk.Radiobutton(mode_frame, text=t["mode_acceptance"], variable=self.mode_var, value="warehouse_acc", command=self.toggle_mode_fields).pack(side="left")
+            tk.Radiobutton(mode_frame, text=t["mode_shipment"], variable=self.mode_var, value="warehouse_ship", command=self.toggle_mode_fields).pack(side="left")
+        else:
+            tk.Label(frame, text=t["agg_mode_label"], font=("Arial", 10, "bold")).pack(pady=(10, 0))
+            self.mode_var = tk.StringVar(value="unit")
+            mode_frame = tk.Frame(frame)
+            mode_frame.pack()
+            tk.Radiobutton(mode_frame, text=t["mode_unit"], variable=self.mode_var, value="unit", command=self.toggle_mode_fields).pack(side="left")
+            tk.Radiobutton(mode_frame, text=t["mode_pallet"], variable=self.mode_var, value="pallet", command=self.toggle_mode_fields).pack(side="left")
 
         self.pallet_size_frame = tk.Frame(frame)
         tk.Label(self.pallet_size_frame, text=t["pallet_size_label"]).pack(side="left")
@@ -872,8 +889,11 @@ class App:
 
     def toggle_mode_fields(self):
         mode = self.mode_var.get()
-        if mode == "pallet" or mode == "warehouse":
+        if mode == "pallet" or mode == "warehouse" or mode == "warehouse_acc":
             self.pallet_size_frame.pack(pady=5)
+            if mode == "warehouse_acc":
+                self.entry_pallet_size.delete(0, tk.END)
+                self.entry_pallet_size.insert(0, "110")
             self.unit_size_frame.pack_forget()
         else:
             self.pallet_size_frame.pack_forget()
@@ -888,8 +908,16 @@ class App:
             messagebox.showerror(t["error"], t["error_fill"]); return
 
         self.agg_mode = self.mode_var.get()
+
+        # Специальная обработка для режима склада
+        if self.agg_mode == "warehouse_ship":
+            self.warehouse_shipment_mode = True
+            # Нам нужно выбрать заказ
+            self.select_order_dialog()
+            return
+
         size = int(self.config["box_size"])
-        if self.agg_mode == "pallet":
+        if self.agg_mode in ["pallet", "warehouse_acc"]:
             try:
                 size = int(self.entry_pallet_size.get())
             except:
@@ -902,8 +930,37 @@ class App:
                     messagebox.showerror(t["error"], t.get("unit_size_label", "Units in box:")); return
 
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
-        self.state.reset(size, mode=self.agg_mode)
+        # В режиме warehouse_acc мы агрегируем короба в палеты
+        effective_mode = "pallet" if self.agg_mode == "warehouse_acc" else self.agg_mode
+        self.state.reset(size, mode=effective_mode)
         self.show_scan_screen()
+
+    def select_order_dialog(self):
+        t = TEXT[self.lang]
+        orders = self.warehouse.get_pending_orders()
+
+        win = tk.Toplevel(self.root)
+        win.title(t["lbl_order_select"])
+        win.geometry("400x300")
+
+        tk.Label(win, text=t["lbl_order_select"], font=("Arial", 12, "bold")).pack(pady=10)
+
+        lb = tk.Listbox(win, font=("Arial", 11))
+        for o in orders: lb.insert(tk.END, o)
+        lb.pack(expand=True, fill="both", padx=10)
+
+        def select():
+            idx = lb.curselection()
+            if not idx:
+                messagebox.showwarning(t["error"], t["err_no_order"])
+                return
+            self.current_order = lb.get(idx)
+            win.destroy()
+            self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
+            self.state.reset(0, mode="shipment") # В режиме отгрузки лимита нет
+            self.show_scan_screen()
+
+        tk.Button(win, text="OK", command=select, width=15, height=2, bg="#4CAF50", fg="white").pack(pady=10)
 
     def show_scan_screen(self):
         t = TEXT[self.lang]
@@ -920,6 +977,12 @@ class App:
         tk.Button(btn, text=t["pause"], width=14, command=self.pause).grid(row=0, column=0, padx=10)
         tk.Button(btn, text=t["save"], width=14, command=self.save_now).grid(row=0, column=1, padx=10)
         tk.Button(btn, text=t["end_shift"], width=16, command=self.end_shift).grid(row=0, column=2, padx=10)
+
+        if self.agg_mode == "warehouse_acc" or self.state.mode == "pallet":
+            tk.Button(btn, text=t["btn_partial_pallet"], width=20, command=self.close_partial_pallet, bg="#FF9800").grid(row=1, column=1, pady=10)
+
+        if self.current_order:
+            tk.Label(self.root, text=f"{t['wh_order']}: {self.current_order}", font=("Arial", 12, "bold"), fg="blue").pack(pady=5)
 
         if self.agg_mode == "warehouse":
             wh_btn = tk.Frame(self.root); wh_btn.pack(side="bottom", pady=5)
@@ -948,10 +1011,45 @@ class App:
 
     def end_shift(self):
         t = TEXT[self.lang]
-        if self.state.in_box != 0: messagebox.showwarning(t["error"], t["need_close_box"]); return
+        if self.state.mode != "shipment" and self.state.in_box != 0:
+            messagebox.showwarning(t["error"], t["need_close_box"]); return
+
         if messagebox.askokcancel(t["end_shift"], t["confirm_end"]):
             self.scanning_active = False
-            files = self.perform_save(); self.send_to_telegram(files); self.duplicates.clear_recovery(); self.show_language_screen()
+            files = self.perform_save()
+            self.send_to_telegram(files)
+
+            if self.agg_mode == "warehouse_ship" and self.current_order:
+                self.warehouse.complete_order(self.current_order)
+                # Отправка спец сообщения в ТГ
+                self.send_shipment_summary_tg()
+                self.current_order = None
+
+            self.duplicates.clear_recovery()
+            self.show_language_screen()
+
+    def send_shipment_summary_tg(self):
+        t = TEXT[self.lang]
+        token = self.config.get("tg_token")
+        chat_id = self.config.get("tg_chat_id")
+        if not token or not chat_id: return
+
+        summary = self.state.get_shift_summary()
+        msg = t["report_shipment_tg"].format(
+            self.current_order,
+            datetime.now().strftime("%H:%M:%S"),
+            summary["total_codes"]
+        )
+        try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg})
+        except: pass
+
+    def close_partial_pallet(self):
+        t = TEXT[self.lang]
+        if self.state.in_box == 0: return
+        if not messagebox.askyesno(t["pallet"], t["btn_partial_pallet"] + "?"): return
+
+        # Принудительно вызываем завершение палеты
+        self.trigger_conveyor_auto_sscc()
 
     def handle_duplicate_error(self, err_msg, code):
         t = TEXT[self.lang]
@@ -1104,19 +1202,29 @@ class App:
 
     def on_scan_shipment(self, raw):
         t = TEXT[self.lang]
-        if not raw.startswith("00"):
-            return # Игнорируем не SSCC при отгрузке
+        # Отгрузка: сканируем палеты (001) или короба (000)
+        item_type = None
+        if raw.startswith("001"): item_type = "pallet"
+        elif raw.startswith("000"): item_type = "box"
+
+        if not item_type:
+            return # Игнорируем остальное
 
         try:
             ok, type_found = self.warehouse.shipment(raw)
             if ok:
+                # Записываем в историю
+                self.warehouse.record_history(raw, item_type, "shipped", self.current_order)
+                # Добавляем в текущее состояние смены для отчета
+                self.state.scan_unit({"clean": raw, "raw": raw, "gtin": "SHIPMENT"})
+
                 self.show_last(f"{t.get('wh_shipped', 'SHIPPED')}: {raw}")
                 # Уведомление в TG
                 token = self.config.get("tg_token")
                 chat_id = self.config.get("tg_chat_id")
                 if token and chat_id:
                     requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                  data={"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({type_found})"})
+                                  data={"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({item_type})"})
         except Exception as e:
             messagebox.showerror(t["error"], str(e))
 
@@ -1136,6 +1244,7 @@ class App:
 
                 if self.config.get("warehouse_enabled"):
                     self.warehouse.register_pallet(raw, box_ssccs)
+                    self.warehouse.record_history(raw, "pallet", "received")
 
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
             except Exception as e: messagebox.showerror(t["error"], str(e))
@@ -1149,9 +1258,16 @@ class App:
                 # В режиме палеты мы сохраняем код коробки как "юнит"
                 parsed = {"clean": raw, "raw": raw, "gtin": "BOX"}
                 res = self.state.scan_unit(parsed)
+
+                if self.config.get("warehouse_enabled"):
+                    self.warehouse.record_history(raw, "box", "received")
+
                 self.show_last(f"{t['added_box']}{raw}"); self.update_info()
-                if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
-                    self.root.after(500, self.trigger_conveyor_auto_sscc)
+
+                # Если достигли 110 (или другого лимита), автоматически закрываем
+                if res == "WAIT_SSCC":
+                    if self.agg_mode == "warehouse_acc" or self.config.get("conveyor_enabled"):
+                        self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
                 else: messagebox.showerror(t["error"], str(e))
@@ -1168,11 +1284,14 @@ class App:
         prefix = f"{t['pallet']}_" if is_pallet else ""
 
         # Базовое имя для большинства файлов (смена)
-        base_shift = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
-        # Базовое имя для агрегации (TXT)
-        base_agg = f"output/{prefix}{t.get('fn_agg', 'агрегация')}_{dt}_{op}_{ts}"
-        # Базовое имя для CSV (ВСЕ)
-        base_all = f"output/{prefix}{t.get('fn_all', 'ВСЕ')}_{dt}_{op}_{ts}"
+        if self.agg_mode == "warehouse_ship" and self.current_order:
+            base_shift = f"output/отгрузка_{dt}_{self.current_order}"
+            base_agg = base_shift
+            base_all = f"output/отгрузка_{dt}_{self.current_order}_csv"
+        else:
+            base_shift = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
+            base_agg = f"output/{prefix}{t.get('fn_agg', 'агрегация')}_{dt}_{op}_{ts}"
+            base_all = f"output/{prefix}{t.get('fn_all', 'ВСЕ')}_{dt}_{op}_{ts}"
 
         xls_a = f"{base_shift}_{t['fn_agg']}.xlsx"
         txt_d = f"{base_shift}_{t['fn_dups']}.txt"
@@ -1204,7 +1323,21 @@ class App:
             self.gen_txt_dups(summary["duplicates"], txt_d)
             files.append(txt_d)
 
+        # Резервное копирование
+        self.backup_files(files)
+
         return files
+
+    def backup_files(self, files):
+        bp = self.config.get("backup_path", "output/backup")
+        if not bp: return
+        try:
+            os.makedirs(bp, exist_ok=True)
+            for f in files:
+                if os.path.exists(f):
+                    shutil.copy2(f, bp)
+        except Exception as e:
+            print(f"Backup error: {e}")
 
     def generate_xml(self, boxes):
         tin = self.config.get("lp_tin", "7777777777")

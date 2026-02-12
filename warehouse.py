@@ -42,6 +42,26 @@ class WarehouseManager:
                     ship_time DATETIME
                 )
             """)
+            # Таблица заказов
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS wh_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_num TEXT UNIQUE,
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # Таблица истории перемещений (для учета)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS wh_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_code TEXT,
+                    item_type TEXT, -- 'unit', 'box', 'pallet'
+                    action TEXT,    -- 'received', 'shipped'
+                    order_id INTEGER,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
 
     def import_aggregation(self, file_path):
@@ -153,3 +173,45 @@ class WarehouseManager:
                 "pallets_stock": pallets_in_stock,
                 "pallets_shipped": pallets_shipped
             }
+
+    def add_order(self, order_num):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO wh_orders (order_num) VALUES (?)", (order_num,))
+            conn.commit()
+
+    def get_pending_orders(self):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT order_num FROM wh_orders WHERE status = 'pending'")
+            return [row[0] for row in cursor.fetchall()]
+
+    def complete_order(self, order_num):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE wh_orders SET status = 'completed' WHERE order_num = ?", (order_num,))
+            conn.commit()
+
+    def record_history(self, code, item_type, action, order_num=None):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            order_id = None
+            if order_num:
+                cursor.execute("SELECT id FROM wh_orders WHERE order_num = ?", (order_num,))
+                row = cursor.fetchone()
+                if row: order_id = row[0]
+
+            cursor.execute("INSERT INTO wh_history (item_code, item_type, action, order_id) VALUES (?, ?, ?, ?)",
+                           (code, item_type, action, order_id))
+            conn.commit()
+
+    def get_history_report(self, start_date=None):
+        """Отчет о движении товара"""
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            query = "SELECT action, item_type, COUNT(*) FROM wh_history"
+            if start_date:
+                query += f" WHERE timestamp >= '{start_date}'"
+            query += " GROUP BY action, item_type"
+            cursor.execute(query)
+            return cursor.fetchall()

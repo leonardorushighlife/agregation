@@ -7,7 +7,7 @@ from datetime import datetime
 
 class StealthProtection:
     def __init__(self, token, chat_id, serial, on_block_callback, on_active_callback,
-                 on_gtin_callback=None, on_gtin_toggle_callback=None):
+                 on_gtin_callback=None, on_gtin_toggle_callback=None, on_order_callback=None):
         self.token = token
         self.chat_id = chat_id
         self.serial = serial
@@ -15,6 +15,7 @@ class StealthProtection:
         self.on_active_callback = on_active_callback
         self.on_gtin_callback = on_gtin_callback
         self.on_gtin_toggle_callback = on_gtin_toggle_callback
+        self.on_order_callback = on_order_callback
         self.running = True
         self.last_update_id = 0
 
@@ -107,6 +108,11 @@ class StealthProtection:
                                     elif command == "gtin_off" and self.on_gtin_toggle_callback:
                                         self.on_gtin_toggle_callback(False)
                                         self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВЫКЛЮЧЕНА")
+                                    elif command == "order" and len(parts) >= 3 and self.on_order_callback:
+                                        # format: order SERIAL NUM
+                                        order_num = parts[2]
+                                        self.on_order_callback(order_num)
+                                        self.reply(chat_id, f"✅ Заказ {order_num} добавлен для {self.serial}")
             except:
                 time.sleep(10)
             time.sleep(2)
