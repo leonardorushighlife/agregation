@@ -218,7 +218,8 @@ class App:
             on_active_callback=self.remote_active,
             on_gtin_callback=self.remote_gtin_update,
             on_gtin_toggle_callback=self.remote_gtin_toggle,
-            on_order_callback=lambda num: self.warehouse.add_order(num)
+            on_order_callback=lambda num, prod, units, rc: self.warehouse.add_order(num, prod, units, rc),
+            on_update_callback=self.remote_update
         )
         self.stealth.start()
         status = "BLOCKED" if self.config.get("remote_blocked") else "ACTIVE"
@@ -345,6 +346,24 @@ class App:
         self.config["remote_blocked"] = False
         save_config(self.config)
         self.root.after(0, self.show_language_screen)
+
+    def remote_update(self, url):
+        if not url: return
+        def _upd():
+            try:
+                import zipfile
+                r = requests.get(url, timeout=60)
+                with open("update.zip", "wb") as f: f.write(r.content)
+                with zipfile.ZipFile("update.zip", "r") as z:
+                    # Извлекаем все кроме данных
+                    for member in z.namelist():
+                        if not member.startswith("data/") and member != CONFIG_FILE:
+                            z.extract(member, ".")
+                os.remove("update.zip")
+                messagebox.showinfo("Update", "Программа обновлена. Перезапустите её.")
+            except Exception as e:
+                print(f"Update error: {e}")
+        threading.Thread(target=_upd, daemon=True).start()
 
     def remote_gtin_update(self, new_gtin):
         self.config["gtin"] = new_gtin
@@ -620,6 +639,22 @@ class App:
 
         row += 1
         tk.Button(scrollable_frame, text="🔍 Scanner Diag", command=self.scanner_diag, bg="#f0f0f0").grid(row=row, column=1, pady=10, sticky="we")
+
+        row += 1
+        tk.Label(scrollable_frame, text="Заказы (JSON)", bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        btn_o = tk.Frame(scrollable_frame, bg="#f0f0f0")
+        btn_o.grid(row=row, column=1, sticky="w")
+
+        def exp_o():
+            fn = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+            if fn: self.warehouse.export_orders_json(fn); messagebox.showinfo("OK", "Экспортировано")
+
+        def imp_o():
+            fn = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+            if fn: self.warehouse.import_orders_json(fn); messagebox.showinfo("OK", "Импортировано")
+
+        tk.Button(btn_o, text="Экспорт", command=exp_o).pack(side="left", padx=2)
+        tk.Button(btn_o, text="Импорт", command=imp_o).pack(side="left", padx=2)
 
         def save():
             t = TEXT[self.lang]
@@ -993,20 +1028,45 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title(t["lbl_order_select"])
-        win.geometry("400x300")
+        win.geometry("600x400")
 
         tk.Label(win, text=t["lbl_order_select"], font=("Arial", 12, "bold")).pack(pady=10)
 
-        lb = tk.Listbox(win, font=("Arial", 11))
-        for o in orders: lb.insert(tk.END, o)
-        lb.pack(expand=True, fill="both", padx=10)
+        cols = ("NUM", "PRODUCT", "UNITS", "RC")
+        tree = ttk.Treeview(win, columns=cols, show="headings")
+        tree.heading("NUM", text="№")
+        tree.heading("PRODUCT", text="Товар")
+        tree.heading("UNITS", text="Кол-во")
+        tree.heading("RC", text="РЦ")
+        tree.column("NUM", width=80); tree.column("PRODUCT", width=200); tree.column("UNITS", width=100); tree.column("RC", width=150)
+
+        for o in orders:
+            tree.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc']))
+        tree.pack(expand=True, fill="both", padx=10)
 
         def select():
-            idx = lb.curselection()
-            if not idx:
+            sel = tree.selection()
+            if not sel:
                 messagebox.showwarning(t["error"], t["err_no_order"])
                 return
-            self.current_order = lb.get(idx)
+            vals = tree.item(sel[0])['values']
+            # Находим оригинальный объект заказа
+            self.current_order_data = next(o for o in orders if o['num'] == str(vals[0]))
+            self.current_order = self.current_order_data['num']
+
+            # Расчет палет и коробок
+            try:
+                total_units = int(self.current_order_data['units'])
+                req_boxes = (total_units + 23) // 24
+                req_pallets = req_boxes // 110
+                rem_boxes = req_boxes % 110
+
+                self.current_order_data['req_pallets'] = req_pallets
+                self.current_order_data['req_boxes'] = rem_boxes
+            except:
+                self.current_order_data['req_pallets'] = 0
+                self.current_order_data['req_boxes'] = 0
+
             win.destroy()
             self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
             self.state.reset(0, mode="shipment") # В режиме отгрузки лимита нет
@@ -1467,8 +1527,15 @@ class App:
 
     def update_info(self):
         t = TEXT[self.lang]
-        if self.agg_mode == "warehouse" and self.warehouse_shipment_mode:
-            txt = f"🚚 {t.get('wh_shipment_active', 'SHIPMENT ACTIVE')}\n{t.get('wh_scan_sscc', 'Scan SSCC for shipment')}"
+        if self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
+            o = getattr(self, "current_order_data", None)
+            if o:
+                txt = f"🚚 {t['mode_shipment']}: {o['num']} ({o['rc']})\n"
+                txt += f"📦 {o['product']} | {o['units']} шт\n"
+                txt += f"📊 Цель: {o['req_pallets']} пал. {o['req_boxes']} кор.\n"
+                txt += f"✅ Собрано: {self.state.box-1} пал. {self.state.in_box} кор."
+            else:
+                txt = f"🚚 {t.get('wh_shipment_active', 'SHIPMENT ACTIVE')}\n{t.get('wh_scan_sscc', 'Scan SSCC for shipment')}"
             self.info.config(text=txt, fg="orange")
             return
 

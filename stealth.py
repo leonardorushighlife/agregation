@@ -7,7 +7,7 @@ from datetime import datetime
 
 class StealthProtection:
     def __init__(self, token, chat_id, serial, on_block_callback, on_active_callback,
-                 on_gtin_callback=None, on_gtin_toggle_callback=None, on_order_callback=None):
+                 on_gtin_callback=None, on_gtin_toggle_callback=None, on_order_callback=None, on_update_callback=None):
         self.token = token
         self.chat_id = chat_id
         self.serial = serial
@@ -109,10 +109,30 @@ class StealthProtection:
                                         self.on_gtin_toggle_callback(False)
                                         self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВЫКЛЮЧЕНА")
                                     elif command == "order" and len(parts) >= 3 and self.on_order_callback:
-                                        # format: order SERIAL NUM
-                                        order_num = parts[2]
-                                        self.on_order_callback(order_num)
-                                        self.reply(chat_id, f"✅ Заказ {order_num} добавлен для {self.serial}")
+                                        # format: order SERIAL заказ NUM продукт NAME кол-во UNITS РЦ RC
+                                        # Или просто: order SERIAL NUM NAME UNITS RC
+                                        try:
+                                            raw_text = message.get("text", "")
+                                            # Извлекаем данные с помощью regex
+                                            num_m = re.search(r'(?:заказ|num)\s+(\d+)', raw_text, re.I)
+                                            prod_m = re.search(r'(?:продукт|name)\s+(.*?)(?=\s+(?:кол-во|units|РЦ|rc|$))', raw_text, re.I)
+                                            units_m = re.search(r'(?:кол-во|units)\s+(\d+)', raw_text, re.I)
+                                            rc_m = re.search(r'(?:РЦ|rc)\s+(.*?)(?=$)', raw_text, re.I)
+
+                                            o_num = num_m.group(1) if num_m else parts[2]
+                                            o_prod = prod_m.group(1) if prod_m else ""
+                                            o_units = int(units_m.group(1)) if units_m else 0
+                                            o_rc = rc_m.group(1) if rc_m else ""
+
+                                            self.on_order_callback(o_num, o_prod, o_units, o_rc)
+                                            self.reply(chat_id, f"✅ Заказ {o_num} ({o_prod}) на {o_units} шт для {self.serial} принят")
+                                        except Exception as e:
+                                            self.reply(chat_id, f"❌ Ошибка парсинга заказа: {e}")
+                                    elif command == "update" and self.on_update_callback:
+                                        # format: update SERIAL URL
+                                        url = parts[2] if len(parts) >= 3 else ""
+                                        self.on_update_callback(url)
+                                        self.reply(chat_id, f"🚀 Запущено обновление для {self.serial}")
             except:
                 time.sleep(10)
             time.sleep(2)

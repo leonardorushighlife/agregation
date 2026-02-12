@@ -47,6 +47,9 @@ class WarehouseManager:
                 CREATE TABLE IF NOT EXISTS wh_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     order_num TEXT UNIQUE,
+                    product_name TEXT,
+                    total_units INTEGER,
+                    destination_rc TEXT,
                     status TEXT DEFAULT 'pending',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -174,17 +177,20 @@ class WarehouseManager:
                 "pallets_shipped": pallets_shipped
             }
 
-    def add_order(self, order_num):
+    def add_order(self, order_num, product_name="", total_units=0, destination_rc=""):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO wh_orders (order_num) VALUES (?)", (order_num,))
+            cursor.execute("""
+                INSERT OR REPLACE INTO wh_orders (order_num, product_name, total_units, destination_rc, status)
+                VALUES (?, ?, ?, ?, 'pending')
+            """, (order_num, product_name, total_units, destination_rc))
             conn.commit()
 
     def get_pending_orders(self):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT order_num FROM wh_orders WHERE status = 'pending'")
-            return [row[0] for row in cursor.fetchall()]
+            cursor.execute("SELECT order_num, product_name, total_units, destination_rc FROM wh_orders WHERE status = 'pending'")
+            return [dict(zip(["num", "product", "units", "rc"], row)) for row in cursor.fetchall()]
 
     def complete_order(self, order_num):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
@@ -215,3 +221,14 @@ class WarehouseManager:
             query += " GROUP BY action, item_type"
             cursor.execute(query)
             return cursor.fetchall()
+
+    def export_orders_json(self, path):
+        orders = self.get_pending_orders()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(orders, f, ensure_ascii=False, indent=2)
+
+    def import_orders_json(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            orders = json.load(f)
+            for o in orders:
+                self.add_order(o['num'], o['product'], int(o['units']), o['rc'])

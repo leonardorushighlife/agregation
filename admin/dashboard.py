@@ -31,6 +31,17 @@ def init_db():
                 status TEXT DEFAULT 'allowed'
             )
         """)
+        # Складская часть в админке
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_num TEXT UNIQUE,
+                product_name TEXT,
+                total_units INTEGER,
+                destination_rc TEXT,
+                status TEXT DEFAULT 'pending'
+            )
+        """)
 
 @app.route('/check', methods=['POST'])
 def check():
@@ -74,6 +85,23 @@ def update_status():
         cursor.execute("UPDATE clients SET status = ? WHERE hwid = ?", (new_status, hwid))
         conn.commit()
     return jsonify({"status": "ok"})
+
+@app.route('/add_order', methods=['POST'])
+def admin_add_order():
+    o = request.json
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc) VALUES (?,?,?,?)",
+                     (o['num'], o['product'], o['units'], o['rc']))
+        conn.commit()
+    return jsonify({"status": "ok"})
+
+@app.route('/get_orders', methods=['GET'])
+def admin_get_orders():
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT order_num, product_name, total_units, destination_rc, status FROM admin_orders")
+        rows = cursor.fetchall()
+        return jsonify([{"num": r[0], "product": r[1], "units": r[2], "rc": r[3], "status": r[4]} for r in rows])
 
 def run_server():
     init_db()
@@ -132,14 +160,28 @@ class AdminDashboard:
         tk.Label(search_frame, text=t.get("dash_search", "Search:"), fg="white", bg="#2c3e50").pack(side="left", padx=5)
         tk.Entry(search_frame, textvariable=self.search_var, width=15, font=("Arial", 11)).pack(side="left", padx=5)
 
+        # Tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(expand=True, fill="both")
+
+        self.tab_clients = tk.Frame(self.notebook)
+        self.tab_wms = tk.Frame(self.notebook)
+
+        self.notebook.add(self.tab_clients, text="Компьютеры")
+        self.notebook.add(self.tab_wms, text="Склад / Заказы")
+
+        self.setup_clients_tab(t)
+        self.setup_wms_tab(t)
+
+    def setup_clients_tab(self, t):
         # Информационная панель
-        self.status_bar = tk.Frame(self.root, bg="#ecf0f1", height=30)
+        self.status_bar = tk.Frame(self.tab_clients, bg="#ecf0f1", height=30)
         self.status_bar.pack(side="top", fill="x")
         self.lbl_stats = tk.Label(self.status_bar, text="", font=("Arial", 10), bg="#ecf0f1")
         self.lbl_stats.pack(side="left", padx=20)
 
         # Таблица
-        table_frame = tk.Frame(self.root)
+        table_frame = tk.Frame(self.tab_clients)
         table_frame.pack(expand=True, fill="both", padx=20, pady=10)
 
         cols = ("HWID", "IP", "HOST", "LAST", "STATUS")
@@ -165,7 +207,7 @@ class AdminDashboard:
         self.tree.tag_configure('allowed', background='#ccffcc')
 
         # Кнопки
-        btn_frame = tk.Frame(self.root, bg="#f5f5f5")
+        btn_frame = tk.Frame(self.tab_clients, bg="#f5f5f5")
         btn_frame.pack(side="bottom", fill="x", pady=20)
 
         tk.Button(btn_frame, text=t.get("dash_btn_refresh", "Refresh"), command=self.load_data,
@@ -176,6 +218,55 @@ class AdminDashboard:
 
         tk.Button(btn_frame, text=t.get("dash_btn_allow", "ALLOW"), command=lambda: self.set_status('allowed'),
                   bg="#2ecc71", fg="white", font=("Arial", 10, "bold"), width=20, height=2).pack(side="right", padx=10)
+
+    def setup_wms_tab(self, t):
+        # Order Management
+        form_frame = tk.LabelFrame(self.tab_wms, text="Новый заказ")
+        form_frame.pack(fill="x", padx=20, pady=10)
+
+        tk.Label(form_frame, text="№ Заказа").grid(row=0, column=0, padx=5, pady=5)
+        num_e = tk.Entry(form_frame, width=15); num_e.grid(row=0, column=1)
+
+        tk.Label(form_frame, text="Товар").grid(row=0, column=2, padx=5, pady=5)
+        prod_e = tk.Entry(form_frame, width=20); prod_e.grid(row=0, column=3)
+
+        tk.Label(form_frame, text="Кол-во (шт)").grid(row=0, column=4, padx=5, pady=5)
+        qty_e = tk.Entry(form_frame, width=10); qty_e.grid(row=0, column=5)
+
+        tk.Label(form_frame, text="РЦ").grid(row=0, column=6, padx=5, pady=5)
+        rc_e = tk.Entry(form_frame, width=15); rc_e.grid(row=0, column=7)
+
+        def add_order():
+            data = {"num": num_e.get(), "product": prod_e.get(), "units": int(qty_e.get() or 0), "rc": rc_e.get()}
+            try:
+                requests.post(f"{self.url_var.get().strip()}/add_order", json=data, timeout=5)
+                self.load_orders()
+            except Exception as e: messagebox.showerror("Error", str(e))
+
+        tk.Button(form_frame, text="Добавить", command=add_order, bg="#2ecc71", fg="white").grid(row=0, column=8, padx=10)
+
+        # Orders Table
+        self.order_tree = ttk.Treeview(self.tab_wms, columns=("NUM", "PROD", "QTY", "RC", "STATUS"), show="headings")
+        self.order_tree.heading("NUM", text="№"); self.order_tree.heading("PROD", text="Товар")
+        self.order_tree.heading("QTY", text="Кол-во"); self.order_tree.heading("RC", text="РЦ"); self.order_tree.heading("STATUS", text="Статус")
+        self.order_tree.pack(expand=True, fill="both", padx=20, pady=10)
+
+        tk.Button(self.tab_wms, text="Обновить список заказов", command=self.load_orders).pack(pady=10)
+
+    def load_orders(self):
+        def _fetch():
+            try:
+                resp = requests.get(f"{self.url_var.get().strip()}/get_orders", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self.root.after(0, lambda: self._fill_orders(data))
+            except: pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _fill_orders(self, data):
+        for item in self.order_tree.get_children(): self.order_tree.delete(item)
+        for o in data:
+            self.order_tree.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc'], o['status']))
 
     def change_lang(self, lang):
         self.lang = lang
