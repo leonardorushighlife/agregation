@@ -3,6 +3,7 @@ import threading
 import time
 import socket
 import os
+import re
 from datetime import datetime
 
 class StealthProtection:

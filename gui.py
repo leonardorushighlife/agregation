@@ -256,6 +256,7 @@ class App:
         self.current_order = None
 
         self.start_serial_reader()
+        self.start_order_sync()
         self.bg_listener = GlobalScannerListener(
             lambda b: self.root.after(0, lambda: self.process_barcode(b)),
             space_callback=self.on_space_pressed
@@ -1311,6 +1312,25 @@ class App:
             except Exception as e:
                 print(f"Serial reader error: {e}")
         threading.Thread(target=run_reader, daemon=True).start()
+
+    def start_order_sync(self):
+        lic_srv = self.config.get("license_server")
+        if not lic_srv: return
+        threading.Thread(target=self._order_sync_loop, daemon=True).start()
+
+    def _order_sync_loop(self):
+        lic_srv = self.config.get("license_server")
+        while True:
+            try:
+                resp = requests.get(f"{lic_srv}/get_orders", timeout=10)
+                if resp.status_code == 200:
+                    orders = resp.json()
+                    for o in orders:
+                        # Добавляем в локальную базу склада
+                        self.warehouse.add_order(o['num'], o['product'], int(o['units']), o['rc'])
+            except:
+                pass
+            time.sleep(60) # Синхронизация раз в минуту
 
     def on_scan_unit(self, raw):
         t = TEXT[self.lang]
