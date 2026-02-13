@@ -257,8 +257,9 @@ class App:
 
         self.start_serial_reader()
         self.start_order_sync()
+        # Вызываем напрямую, так как GlobalScannerListener работает в отдельном потоке
         self.bg_listener = GlobalScannerListener(
-            lambda b: self.root.after(0, lambda: self.process_barcode(b)),
+            self.process_barcode,
             space_callback=self.on_space_pressed
         )
         self.bg_listener.start()
@@ -968,6 +969,7 @@ class App:
             mode_frame.pack()
             tk.Radiobutton(mode_frame, text=t.get("mode_unit_acc", "Units"), variable=self.mode_var, value="warehouse_unit_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_acceptance"], variable=self.mode_var, value="warehouse_acc", command=self.toggle_mode_fields).pack(side="left")
+            tk.Radiobutton(mode_frame, text=t.get("mode_box_acc", "Boxes"), variable=self.mode_var, value="warehouse_box_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_shipment"], variable=self.mode_var, value="warehouse_ship", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t.get("mode_return", "Return"), variable=self.mode_var, value="warehouse_return", command=self.toggle_mode_fields).pack(side="left")
         else:
@@ -996,7 +998,7 @@ class App:
 
     def toggle_mode_fields(self):
         mode = self.mode_var.get()
-        if mode in ["pallet", "warehouse", "warehouse_acc"]:
+        if mode in ["pallet", "warehouse_acc"]:
             self.pallet_size_frame.pack(pady=5)
             if mode == "warehouse_acc":
                 self.entry_pallet_size.delete(0, tk.END)
@@ -1204,8 +1206,10 @@ class App:
             datetime.now().strftime("%H:%M:%S"),
             summary["total_codes"]
         )
-        try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg})
-        except: pass
+        def _send():
+            try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg}, timeout=10)
+            except: pass
+        threading.Thread(target=_send, daemon=True).start()
 
     def close_partial_pallet(self):
         t = TEXT[self.lang]
@@ -1254,17 +1258,35 @@ class App:
         rep = self.warehouse.get_stock_report()
         msg = (f"📦 {t.get('wh_stock_units', 'Units')}: {rep['total_units']}\n"
                f"📦 {t.get('wh_stock_boxes', 'Boxes')}: {rep['boxes_stock']} / {rep['boxes_shipped']}\n"
-               f"📦 {t.get('wh_stock_pallets', 'Pallets')}: {rep['pallets_stock']} / {rep['pallets_shipped']}")
+               f"📦 {t.get('wh_stock_pallets', 'Pallets')}: {rep['pallets_stock']} / {rep['pallets_shipped']}\n"
+               f"{'-'*20}\n"
+               f"📈 {t.get('wh_received_today', 'Received Today')}: {rep['received_today']}\n"
+               f"📉 {t.get('wh_shipped_today', 'Shipped Today')}: {rep['shipped_today']}\n"
+               f"🔄 {t.get('wh_returned_today', 'Returned Today')}: {rep['returned_today']}")
         messagebox.showinfo(t.get("wh_stock", "Stock"), msg)
 
         # Отправка в TG
         token = self.config.get("tg_token")
         chat_id = self.config.get("tg_chat_id")
         if token and chat_id:
-            try:
-                requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                              data={"chat_id": chat_id, "text": f"📊 {t.get('wh_stock', 'Stock Report')}\n{msg}"})
-            except: pass
+            def _send():
+                try:
+                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                                  data={"chat_id": chat_id, "text": f"📊 {t.get('wh_stock', 'Stock Report')}\n{msg}"}, timeout=10)
+                except: pass
+            threading.Thread(target=_send, daemon=True).start()
+
+    def on_scan_box_acceptance(self, raw):
+        t = TEXT[self.lang]
+        if not raw.startswith("00"): return
+        try:
+            self.duplicates.check_sscc(raw)
+            self.warehouse.acceptance_box(raw)
+            self.warehouse.record_history(raw, "box", "received")
+            self.show_last(f"{t['mode_box_acc']}: {raw}")
+            self.update_info()
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror(t["error"], str(e)))
 
     def process_barcode(self, raw_input):
         if not self.scanning_active or self.paused: return
@@ -1296,6 +1318,10 @@ class App:
 
             if self.agg_mode == "warehouse_return":
                 self.on_scan_return(raw)
+                continue
+
+            if self.agg_mode == "warehouse_box_acc":
+                self.on_scan_box_acceptance(raw)
                 continue
 
             if self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
@@ -1354,7 +1380,7 @@ class App:
         t = TEXT[self.lang]
         if self.state.wait_sscc:
             if not raw.startswith("00"):
-                messagebox.showerror(t["error"], t["err_expect_box_prefix"]); return
+                self.root.after(0, lambda: messagebox.showerror(t["error"], t["err_expect_box_prefix"])); return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
@@ -1362,25 +1388,25 @@ class App:
 
                 if self.config.get("warehouse_enabled"):
                     # Сохраняем в складскую базу
-                    with sqlite3.connect(self.warehouse.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc) VALUES (?)", (raw,))
-                        for u in units:
-                            cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (u["clean"], raw))
-                        conn.commit()
+                    self.warehouse.acceptance_box(raw)
+                    self.warehouse.register_units_in_box(raw, [u["clean"] for u in units])
                     self.warehouse.record_history(raw, "box", "received")
 
                 self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
-            except Exception as e: messagebox.showerror(t["error"], str(e))
+            except Exception as e: self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
         else:
             if raw.startswith("00") and len(raw) >= 18:
-                messagebox.showwarning(t["error"], t["warn_box_incomplete"]); return
+                self.root.after(0, lambda: messagebox.showwarning(t["error"], t["warn_box_incomplete"])); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
                     raise Exception(t["err_gtin"])
+
+                # Показываем код СРАЗУ для отклика
+                self.show_last(parsed["raw"])
+
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
-                res = self.state.scan_unit(parsed); self.show_last(parsed["raw"]); self.update_info()
+                res = self.state.scan_unit(parsed); self.update_info()
 
                 if self.config.get("warehouse_enabled"):
                     self.warehouse.record_history(parsed["clean"], "unit", "received")
@@ -1390,12 +1416,12 @@ class App:
             except GS1Error as e:
                 err_key = str(e)
                 msg = t.get(err_key, err_key)
-                messagebox.showerror(t["error"], msg)
+                self.root.after(0, lambda msg=msg: messagebox.showerror(t["error"], msg))
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"):
-                    self.handle_duplicate_error(str(e), raw)
+                    self.root.after(0, lambda e=e: self.handle_duplicate_error(str(e), raw))
                 else:
-                    messagebox.showerror(t["error"], str(e))
+                    self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
 
     def on_space_pressed(self):
         if self.config.get("cv_mode_enabled") and self.scanning_active and not self.paused:
@@ -1466,12 +1492,12 @@ class App:
                 token = self.config.get("tg_token")
                 chat_id = self.config.get("tg_chat_id")
                 if token and chat_id:
-                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                  data={"chat_id": chat_id, "text": f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})"})
+                    threading.Thread(target=requests.post, args=(f"https://api.telegram.org/bot{token}/sendMessage",),
+                                     kwargs={"data": {"chat_id": chat_id, "text": f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})"}}).start()
             else:
-                messagebox.showwarning(t["error"], t.get("err_not_found", "Item not found in database"))
+                self.root.after(0, lambda: messagebox.showwarning(t["error"], t.get("err_not_found", "Item not found in database")))
         except Exception as e:
-            messagebox.showerror(t["error"], str(e))
+            self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
 
     def on_scan_shipment(self, raw):
         t = TEXT[self.lang]
@@ -1500,10 +1526,10 @@ class App:
                 token = self.config.get("tg_token")
                 chat_id = self.config.get("tg_chat_id")
                 if token and chat_id:
-                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                  data={"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({item_type})"})
+                    threading.Thread(target=requests.post, args=(f"https://api.telegram.org/bot{token}/sendMessage",),
+                                     kwargs={"data": {"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({item_type})"}}).start()
         except Exception as e:
-            messagebox.showerror(t["error"], str(e))
+            self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
 
     def on_scan_pallet(self, raw):
         t = TEXT[self.lang]
@@ -1524,13 +1550,16 @@ class App:
                     self.warehouse.record_history(raw, "pallet", "received")
 
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
-            except Exception as e: messagebox.showerror(t["error"], str(e))
+            except Exception as e: self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
         else:
             # Ожидаем код коробки (начинается на 00)
             if not raw.startswith("00"):
                 # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
                 return
             try:
+                # Показываем СРАЗУ
+                self.show_last(raw)
+
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
                 # В режиме палеты мы сохраняем код коробки как "юнит"
                 parsed = {"clean": raw, "raw": raw, "gtin": "BOX"}
@@ -1539,7 +1568,7 @@ class App:
                 if self.config.get("warehouse_enabled"):
                     self.warehouse.record_history(raw, "box", "received")
 
-                self.show_last(f"{t['added_box']}{raw}"); self.update_info()
+                self.update_info()
 
                 # Если достигли 110 (или другого лимита), автоматически закрываем
                 if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
@@ -1548,8 +1577,10 @@ class App:
                     else:
                         self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
-                if str(e).startswith("DUPLICATE|"): self.handle_duplicate_error(str(e), raw)
-                else: messagebox.showerror(t["error"], str(e))
+                if str(e).startswith("DUPLICATE|"):
+                    self.root.after(0, lambda e=e: self.handle_duplicate_error(str(e), raw))
+                else:
+                    self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
 
     def perform_save(self):
         t = TEXT[self.lang]
@@ -1660,25 +1691,38 @@ class App:
         tk_l = TEXT[self.lang]
         t = self.config.get("tg_token"); c = self.config.get("tg_chat_id")
         if not t or not c: return
-        try:
-            sum_data = self.state.get_shift_summary()
-            dur = datetime.now() - self.state.shift_start_time
-            total_seconds = int(dur.total_seconds())
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            time_str = f"{hours}h {minutes}m"
-            msg = f"👤 {tk_l['tg_op']}: {self.shift_info['name']}\n📦 {tk_l['tg_boxes']}: {sum_data['total_boxes']}\n🔢 {tk_l['tg_codes']}: {sum_data['total_codes']}\n🕒 {tk_l['tg_time']}: {time_str}"
-            if sum_data.get("duplicates"): msg += f"\n🚫 {tk_l['tg_dups']}: {len(sum_data['duplicates'])}"
-            requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg})
-            for p in files:
-                with open(p, "rb") as f: requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f})
-        except Exception as e:
-            print(f"Telegram send error: {e}")
+
+        def _send():
+            try:
+                sum_data = self.state.get_shift_summary()
+                dur = datetime.now() - self.state.shift_start_time
+                total_seconds = int(dur.total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                time_str = f"{hours}h {minutes}m"
+                msg = f"👤 {tk_l['tg_op']}: {self.shift_info['name']}\n📦 {tk_l['tg_boxes']}: {sum_data['total_boxes']}\n🔢 {tk_l['tg_codes']}: {sum_data['total_codes']}\n🕒 {tk_l['tg_time']}: {time_str}"
+                if sum_data.get("duplicates"): msg += f"\n🚫 {tk_l['tg_dups']}: {len(sum_data['duplicates'])}"
+                requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg}, timeout=15)
+                for p in files:
+                    if os.path.exists(p):
+                        with open(p, "rb") as f:
+                            requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f}, timeout=30)
+            except Exception as e:
+                print(f"Telegram send error: {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def show_last(self, text):
-        self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
+        def _upd():
+            self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
+        self.root.after(0, _upd)
 
     def update_info(self):
+        def _upd():
+            self._update_info_ui()
+        self.root.after(0, _upd)
+
+    def _update_info_ui(self):
         t = TEXT[self.lang]
         if self.agg_mode == "warehouse_return":
             txt = f"🔄 {t.get('wh_return_mode', 'RETURN MODE')}\n{t.get('wh_scan_return', 'Scan SSCC for return')}"

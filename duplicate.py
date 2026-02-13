@@ -21,8 +21,10 @@ class DuplicateChecker:
 
         # Для клиента: статус подключения
         self.is_connected = False
-        self._client_socket = None
         self._socket_lock = threading.Lock()
+
+        # Кеширование соединений (thread-local)
+        self._local = threading.local()
 
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
@@ -36,32 +38,44 @@ class DuplicateChecker:
             # Поток для поддержания статуса подключения (heartbeat)
             threading.Thread(target=self._connection_monitor, daemon=True).start()
 
-    def _init_db(self):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS seen_codes (
-                    code TEXT PRIMARY KEY,
-                    scan_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    operator TEXT,
-                    workplace TEXT,
-                    sscc TEXT
-                )
-            """)
-            # Миграция для старых баз
-            try:
-                cursor.execute("ALTER TABLE seen_codes ADD COLUMN operator TEXT")
-            except: pass
-            try:
-                cursor.execute("ALTER TABLE seen_codes ADD COLUMN workplace TEXT")
-            except: pass
-            try:
-                cursor.execute("ALTER TABLE seen_codes ADD COLUMN sscc TEXT")
-            except: pass
+    def _get_conn(self):
+        if not hasattr(self._local, "conn"):
+            self._local.conn = sqlite3.connect(self.db_path, timeout=30)
+            self._local.conn.execute("PRAGMA journal_mode=WAL")
+            self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn.execute("PRAGMA cache_size=-64000") # 64MB cache
+        return self._local.conn
 
-            cursor.execute("CREATE TABLE IF NOT EXISTS seen_sscc (code TEXT PRIMARY KEY, scan_time DATETIME DEFAULT CURRENT_TIMESTAMP)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS recovery_shift (id INTEGER PRIMARY KEY AUTOINCREMENT, sscc TEXT, units_json TEXT, shift_info TEXT)")
-            conn.commit()
+    def _init_db(self):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS seen_codes (
+                code TEXT PRIMARY KEY,
+                scan_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                operator TEXT,
+                workplace TEXT,
+                sscc TEXT
+            )
+        """)
+        # Миграция для старых баз
+        try:
+            cursor.execute("ALTER TABLE seen_codes ADD COLUMN operator TEXT")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE seen_codes ADD COLUMN workplace TEXT")
+        except: pass
+        try:
+            cursor.execute("ALTER TABLE seen_codes ADD COLUMN sscc TEXT")
+        except: pass
+
+        cursor.execute("CREATE TABLE IF NOT EXISTS seen_sscc (code TEXT PRIMARY KEY, scan_time DATETIME DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS recovery_shift (id INTEGER PRIMARY KEY AUTOINCREMENT, sscc TEXT, units_json TEXT, shift_info TEXT)")
+        # Индексы для скорости
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_seen_codes_sscc ON seen_codes(sscc)")
+        except: pass
+        conn.commit()
 
     # --- СЕТЕВАЯ ЛОГИКА (СЕРВЕР) ---
 
@@ -88,11 +102,17 @@ class DuplicateChecker:
 
     def _handle_client_connection(self, conn, addr):
         with conn:
-            conn.settimeout(5)
+            conn.settimeout(3)
             try:
-                data = conn.recv(4096).decode('utf-8')
-                if not data: return
-                req = json.loads(data)
+                # Читаем до конца (shutdown на стороне клиента)
+                received = b""
+                while True:
+                    chunk = conn.recv(8192)
+                    if not chunk: break
+                    received += chunk
+
+                if not received: return
+                req = json.loads(received.decode('utf-8'))
 
                 if req.get('key') != self.access_key:
                     res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ"}
@@ -158,21 +178,22 @@ class DuplicateChecker:
 
         req['key'] = self.access_key
 
-        # Для ускорения используем короткий таймаут на установку соединения
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2) # Таймаут 2 сек для предотвращения долгого ожидания
+                s.settimeout(1.5) # Достаточно для локальной сети
                 s.connect((self.server_ip, self.port))
                 s.sendall(json.dumps(req).encode('utf-8'))
+                s.shutdown(socket.SHUT_WR) # Сигнал серверу о завершении отправки
 
-                # Получаем ответ
-                data = b""
+                # Читаем ответ
+                received = b""
                 while True:
-                    chunk = s.recv(4096)
+                    chunk = s.recv(8192)
                     if not chunk: break
-                    data += chunk
+                    received += chunk
 
-                return json.loads(data.decode('utf-8'))
+                if not received: return {"status": "error", "message": "Пустой ответ"}
+                return json.loads(received.decode('utf-8'))
         except Exception as e:
             return {"status": "error", "message": f"Нет связи с сервером ({e})"}
 
@@ -215,17 +236,17 @@ class DuplicateChecker:
             self.check_local(code, operator, workplace)
 
     def check_local(self, code, operator=None, workplace=None):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT operator, workplace, sscc FROM seen_codes WHERE code = ?", (code,))
-            row = cursor.fetchone()
-            if row:
-                op, wp, sscc = row
-                raise ValueError(f"DUPLICATE|{op or ''}|{wp or ''}|{sscc or ''}")
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT operator, workplace, sscc FROM seen_codes WHERE code = ?", (code,))
+        row = cursor.fetchone()
+        if row:
+            op, wp, sscc = row
+            raise ValueError(f"DUPLICATE|{op or ''}|{wp or ''}|{sscc or ''}")
 
-            cursor.execute("INSERT INTO seen_codes (code, operator, workplace) VALUES (?, ?, ?)",
-                           (code, operator, workplace))
-            conn.commit()
+        cursor.execute("INSERT INTO seen_codes (code, operator, workplace) VALUES (?, ?, ?)",
+                       (code, operator, workplace))
+        conn.commit()
 
     def check_sscc(self, code):
         if self.is_server:
@@ -237,47 +258,48 @@ class DuplicateChecker:
             self.check_sscc_local(code)
 
     def check_sscc_local(self, code):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT code FROM seen_sscc WHERE code = ?", (code,))
-            if cursor.fetchone(): raise ValueError("Этот SSCC уже использовался")
-            cursor.execute("INSERT INTO seen_sscc (code) VALUES (?)", (code,))
-            conn.commit()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT code FROM seen_sscc WHERE code = ?", (code,))
+        if cursor.fetchone(): raise ValueError("Этот SSCC уже использовался")
+        cursor.execute("INSERT INTO seen_sscc (code) VALUES (?)", (code,))
+        conn.commit()
 
     def update_sscc_for_units(self, codes, sscc):
         if self.is_server:
             self.update_sscc_local(codes, sscc)
         else:
-            self.network_request({"type": "update_sscc", "codes": codes, "sscc": sscc})
+            # Делаем это в фоне чтобы не тормозить UI
+            threading.Thread(target=self.network_request, args=({"type": "update_sscc", "codes": codes, "sscc": sscc},), daemon=True).start()
             self.update_sscc_local(codes, sscc)
 
     def update_sscc_local(self, codes, sscc):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            for code in codes:
-                cursor.execute("UPDATE seen_codes SET sscc = ? WHERE code = ?", (sscc, code))
-            conn.commit()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        for code in codes:
+            cursor.execute("UPDATE seen_codes SET sscc = ? WHERE code = ?", (sscc, code))
+        conn.commit()
 
     # --- РЕЗЕРВИРОВАНИЕ ---
     def save_box_to_recovery(self, sscc, units, shift_info):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO recovery_shift (sscc, units_json, shift_info) VALUES (?, ?, ?)", (sscc, json.dumps(units), json.dumps(shift_info)))
-            conn.commit()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO recovery_shift (sscc, units_json, shift_info) VALUES (?, ?, ?)", (sscc, json.dumps(units), json.dumps(shift_info)))
+        conn.commit()
 
     def get_recovery_data(self):
         try:
-            with sqlite3.connect(self.db_path, timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT sscc, units_json, shift_info FROM recovery_shift")
-                return cursor.fetchall()
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT sscc, units_json, shift_info FROM recovery_shift")
+            return cursor.fetchall()
         except: return []
 
     def clear_recovery(self):
-        with sqlite3.connect(self.db_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM recovery_shift")
-            conn.commit()
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM recovery_shift")
+        conn.commit()
 
 def get_local_ip():
     try:
