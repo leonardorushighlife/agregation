@@ -953,14 +953,26 @@ class App:
         self.entry_date = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_date.insert(0, datetime.now().strftime("%d.%m.%Y")); self.entry_date.pack(pady=5)
 
         vcmd = (self.root.register(lambda P: P == "" or P.isdigit()), '%P')
-        tk.Label(frame, text=t["workplace"], font=("Arial", 10)).pack()
-        self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd); self.entry_wp.pack(pady=5)
 
-        tk.Label(frame, text=t["name"], font=("Arial", 10)).pack()
-        self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
+        is_wh = self.config.get("warehouse_enabled")
+
+        if is_wh:
+            tk.Label(frame, text=t["admin_prod_name"], font=("Arial", 10)).pack()
+            self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
+            self.entry_name.insert(0, self.config.get("product_name", ""))
+
+            tk.Label(frame, text=t["admin_gtin"], font=("Arial", 10)).pack()
+            self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_wp.pack(pady=5)
+            self.entry_wp.insert(0, self.config.get("gtin", ""))
+        else:
+            tk.Label(frame, text=t["workplace"], font=("Arial", 10)).pack()
+            self.entry_wp = tk.Entry(frame, width=30, font=("Arial", 14), justify="center", validate="key", validatecommand=vcmd); self.entry_wp.pack(pady=5)
+
+            tk.Label(frame, text=t["name"], font=("Arial", 10)).pack()
+            self.entry_name = tk.Entry(frame, width=30, font=("Arial", 14), justify="center"); self.entry_name.pack(pady=5)
 
         # Выбор режима агрегации
-        if self.config.get("warehouse_enabled"):
+        if is_wh:
             tk.Label(frame, text=t.get("wh_stock_movement", "Warehouse Mode"), font=("Arial", 10, "bold")).pack(pady=(10, 0))
             self.mode_var = tk.StringVar(value="warehouse_acc")
             mode_frame = tk.Frame(frame)
@@ -1017,6 +1029,7 @@ class App:
         if not self.entry_date.get() or not self.entry_wp.get() or not self.entry_name.get():
             messagebox.showerror(t["error"], t["error_fill"]); return
 
+        is_wh = self.config.get("warehouse_enabled")
         self.agg_mode = self.mode_var.get()
 
         # Специальная обработка для режима склада
@@ -1045,7 +1058,17 @@ class App:
                 except:
                     messagebox.showerror(t["error"], t.get("unit_size_label", "Units in box:")); return
 
-        self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
+        if is_wh:
+            # В режиме склада entry_wp - это GTIN, entry_name - это продукт
+            self.shift_info = {
+                "date": self.entry_date.get(),
+                "gtin": self.entry_wp.get(),
+                "name": self.entry_name.get(),
+                "workplace": "WH", # Дефолт для склада
+            }
+        else:
+            self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
+
         # В режиме warehouse_acc мы агрегируем короба в палеты
         effective_mode = self.agg_mode
         if self.agg_mode == "warehouse_acc": effective_mode = "pallet"
@@ -1100,6 +1123,10 @@ class App:
             # Находим оригинальный объект заказа
             self.current_order_data = next(o for o in orders if o['num'] == str(vals[0]))
             self.current_order = self.current_order_data['num']
+
+            # В режиме отгрузки нам всё равно нужны GTIN и имя продукта
+            self.config["gtin"] = self.current_order_data.get('gtin', self.config.get('gtin', ''))
+            self.config["product_name"] = self.current_order_data.get('product', self.config.get('product_name', ''))
 
             # Расчет палет и коробок
             try:
