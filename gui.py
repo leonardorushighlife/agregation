@@ -230,7 +230,7 @@ class App:
             on_active_callback=self.remote_active,
             on_gtin_callback=self.remote_gtin_update,
             on_gtin_toggle_callback=self.remote_gtin_toggle,
-            on_order_callback=lambda num, prod, units, rc: self.warehouse.add_order(num, prod, units, rc),
+            on_order_callback=lambda num, prod, units, rc, gtin: self.warehouse.add_order(num, prod, units, rc, gtin),
             on_update_callback=self.remote_update
         )
         self.stealth.start()
@@ -890,12 +890,9 @@ class App:
 
             if self.config.get("warehouse_enabled"):
                 # Сохраняем в складскую базу
-                with sqlite3.connect(self.warehouse.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc) VALUES (?)", (sscc,))
-                    for u in units:
-                        cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (u["clean"], sscc))
-                    conn.commit()
+                gtin = self.shift_info.get("gtin")
+                self.warehouse.acceptance_box(sscc, gtin=gtin)
+                self.warehouse.register_units_in_box(sscc, [u["clean"] for u in units])
                 self.warehouse.record_history(sscc, "box", "received")
 
             self.show_last(f"{t['closed_box']}{sscc}")
@@ -915,7 +912,8 @@ class App:
             self.duplicates.save_box_to_recovery(sscc, units, self.shift_info)
 
             if self.config.get("warehouse_enabled"):
-                self.warehouse.register_pallet(sscc, box_ssccs)
+                gtin = self.shift_info.get("gtin")
+                self.warehouse.register_pallet(sscc, box_ssccs, gtin=gtin)
                 self.warehouse.record_history(sscc, "pallet", "received")
 
             self.show_last(f"{t['closed_pallet']}{sscc}")
@@ -1281,7 +1279,8 @@ class App:
         if not raw.startswith("00"): return
         try:
             self.duplicates.check_sscc(raw)
-            self.warehouse.acceptance_box(raw)
+            gtin = self.shift_info.get("gtin")
+            self.warehouse.acceptance_box(raw, gtin=gtin)
             self.warehouse.record_history(raw, "box", "received")
             self.show_last(f"{t['mode_box_acc']}: {raw}")
             self.update_info()
@@ -1388,7 +1387,8 @@ class App:
 
                 if self.config.get("warehouse_enabled"):
                     # Сохраняем в складскую базу
-                    self.warehouse.acceptance_box(raw)
+                    gtin = self.shift_info.get("gtin")
+                    self.warehouse.acceptance_box(raw, gtin=gtin)
                     self.warehouse.register_units_in_box(raw, [u["clean"] for u in units])
                     self.warehouse.record_history(raw, "box", "received")
 
@@ -1501,33 +1501,45 @@ class App:
 
     def on_scan_shipment(self, raw):
         t = TEXT[self.lang]
-        # Отгрузка: сканируем палеты (001) или короба (000)
-        item_type = None
-        if raw.startswith("001"): item_type = "pallet"
-        elif raw.startswith("000"): item_type = "box"
+        if not raw.startswith("00"):
+            self.root.after(0, lambda: messagebox.showerror(t["error"], t.get("err_expect_sscc", "Expected SSCC"))); return
 
-        if not item_type:
-            return # Игнорируем остальное
+        if not self.current_order:
+            self.root.after(0, lambda: messagebox.showerror(t["error"], t.get("err_no_order", "Select order first!"))); return
 
         try:
+            # Проверяем SSCC в базе склада
+            info = self.warehouse.get_sscc_info(raw)
+            if not info:
+                raise Exception("SSCC not found in Acceptance database")
+
+            # Получаем инфо о текущем заказе (нужен GTIN)
+            order_gtin = None
+            pending = self.warehouse.get_pending_orders()
+            for o in pending:
+                if o['num'] == self.current_order:
+                    order_gtin = o.get('gtin')
+                    break
+
+            if order_gtin and info.get("gtin") and info["gtin"] != order_gtin:
+                raise Exception(f"Wrong product: order requires GTIN {order_gtin}, but this item has {info['gtin']}")
+
             ok, type_found = self.warehouse.shipment(raw)
             if ok:
                 # Записываем в историю
-                self.warehouse.record_history(raw, item_type, "shipped", self.current_order)
+                self.warehouse.record_history(raw, info["type"], "shipped", self.current_order)
 
-                # Добавляем в текущее состояние смены для отчета (как закрытый короб)
+                # Добавляем в текущее состояние смены для отчета
                 content = self.warehouse.get_sscc_content(raw)
-                parsed_content = [{"clean": c, "raw": c, "gtin": ""} for c in content]
+                parsed_content = [{"clean": c, "raw": c, "gtin": info.get("gtin", "")} for c in content]
                 self.state.boxes_data.append((raw, parsed_content))
                 self.state.total_codes_in_shift += len(parsed_content)
 
                 self.show_last(f"{t.get('wh_shipped', 'SHIPPED')}: {raw}")
-                # Уведомление в TG
-                token = self.config.get("tg_token")
-                chat_id = self.config.get("tg_chat_id")
-                if token and chat_id:
-                    threading.Thread(target=requests.post, args=(f"https://api.telegram.org/bot{token}/sendMessage",),
-                                     kwargs={"data": {"chat_id": chat_id, "text": f"🚚 {t.get('wh_shipped', 'Shipped')}: {raw} ({item_type})"}}).start()
+                # Уведомление в TG (Stealth)
+                threading.Thread(target=self.stealth.send_shipment_notification, args=(self.current_order, raw), daemon=True).start()
+
+                self.update_info()
         except Exception as e:
             self.root.after(0, lambda e=e: messagebox.showerror(t["error"], str(e)))
 
@@ -1546,7 +1558,8 @@ class App:
                 self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
                 if self.config.get("warehouse_enabled"):
-                    self.warehouse.register_pallet(raw, box_ssccs)
+                    gtin = self.shift_info.get("gtin")
+                    self.warehouse.register_pallet(raw, box_ssccs, gtin=gtin)
                     self.warehouse.record_history(raw, "pallet", "received")
 
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
@@ -1566,6 +1579,8 @@ class App:
                 res = self.state.scan_unit(parsed)
 
                 if self.config.get("warehouse_enabled"):
+                    gtin = self.shift_info.get("gtin")
+                    self.warehouse.acceptance_box(raw, gtin=gtin)
                     self.warehouse.record_history(raw, "box", "received")
 
                 self.update_info()

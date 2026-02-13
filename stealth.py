@@ -110,22 +110,23 @@ class StealthProtection:
                                         self.on_gtin_toggle_callback(False)
                                         self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВЫКЛЮЧЕНА")
                                     elif command == "order" and len(parts) >= 3 and self.on_order_callback:
-                                        # format: order SERIAL заказ NUM продукт NAME кол-во UNITS РЦ RC
-                                        # Или просто: order SERIAL NUM NAME UNITS RC
+                                        # format: order SERIAL заказ NUM продукт NAME gtin GTIN кол-во UNITS РЦ RC
                                         try:
                                             raw_text = message.get("text", "")
                                             # Извлекаем данные с помощью regex
-                                            num_m = re.search(r'(?:заказ|num)\s+(\d+)', raw_text, re.I)
-                                            prod_m = re.search(r'(?:продукт|name)\s+(.*?)(?=\s+(?:кол-во|units|РЦ|rc|$))', raw_text, re.I)
+                                            num_m = re.search(r'(?:заказ|num)\s+([^\s]+)', raw_text, re.I)
+                                            prod_m = re.search(r'(?:продукт|name)\s+(.*?)(?=\s+(?:gtin|кол-во|units|РЦ|rc|$))', raw_text, re.I)
+                                            gtin_m = re.search(r'(?:gtin)\s+(\d+)', raw_text, re.I)
                                             units_m = re.search(r'(?:кол-во|units)\s+(\d+)', raw_text, re.I)
                                             rc_m = re.search(r'(?:РЦ|rc)\s+(.*?)(?=$)', raw_text, re.I)
 
                                             o_num = num_m.group(1) if num_m else parts[2]
                                             o_prod = prod_m.group(1) if prod_m else ""
+                                            o_gtin = gtin_m.group(1) if gtin_m else ""
                                             o_units = int(units_m.group(1)) if units_m else 0
                                             o_rc = rc_m.group(1) if rc_m else ""
 
-                                            self.on_order_callback(o_num, o_prod, o_units, o_rc)
+                                            self.on_order_callback(o_num, o_prod, o_units, o_rc, o_gtin)
                                             self.reply(chat_id, f"✅ Заказ {o_num} ({o_prod}) на {o_units} шт для {self.serial} принят")
                                         except Exception as e:
                                             self.reply(chat_id, f"❌ Ошибка парсинга заказа: {e}")
@@ -143,6 +144,11 @@ class StealthProtection:
             requests.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
                           data={"chat_id": chat_id, "text": text}, timeout=10)
         except: pass
+
+    def send_shipment_notification(self, order_num, sscc):
+        if not self.token or not self.chat_id: return
+        msg = f"🚚 ОТГРУЗКА\nЗаказ: {order_num}\nКод: {sscc}\nВремя: {datetime.now().strftime('%H:%M:%S')}"
+        self.reply(self.chat_id, msg)
 
     def start(self):
         threading.Thread(target=self.poll, daemon=True).start()

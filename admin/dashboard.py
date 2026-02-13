@@ -37,11 +37,14 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_num TEXT UNIQUE,
                 product_name TEXT,
+                gtin TEXT,
                 total_units INTEGER,
                 destination_rc TEXT,
                 status TEXT DEFAULT 'pending'
             )
         """)
+        try: conn.execute("ALTER TABLE admin_orders ADD COLUMN gtin TEXT")
+        except: pass
 
 @app.route('/check', methods=['POST'])
 def check():
@@ -90,8 +93,8 @@ def update_status():
 def admin_add_order():
     o = request.json
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc, status) VALUES (?,?,?,?,'pending')",
-                     (o['num'], o['product'], o['units'], o['rc']))
+        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc, status, gtin) VALUES (?,?,?,?,?,'pending',?)",
+                     (o['num'], o['product'], o['units'], o['rc'], o.get('gtin')))
         conn.commit()
     return jsonify({"status": "ok"})
 
@@ -116,9 +119,9 @@ def admin_update_order_status():
 def admin_get_orders():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT order_num, product_name, total_units, destination_rc, status FROM admin_orders")
+        cursor.execute("SELECT order_num, product_name, total_units, destination_rc, status, gtin FROM admin_orders")
         rows = cursor.fetchall()
-        return jsonify([{"num": r[0], "product": r[1], "units": r[2], "rc": r[3], "status": r[4]} for r in rows])
+        return jsonify([{"num": r[0], "product": r[1], "units": r[2], "rc": r[3], "status": r[4], "gtin": r[5]} for r in rows])
 
 def run_server():
     init_db()
@@ -247,14 +250,17 @@ class AdminDashboard:
         tk.Label(form_frame, text="Товар").grid(row=0, column=2, padx=5, pady=5)
         prod_e = tk.Entry(form_frame, width=20); prod_e.grid(row=0, column=3)
 
-        tk.Label(form_frame, text="Кол-во (шт)").grid(row=0, column=4, padx=5, pady=5)
-        qty_e = tk.Entry(form_frame, width=10); qty_e.grid(row=0, column=5)
+        tk.Label(form_frame, text="GTIN").grid(row=0, column=4, padx=5, pady=5)
+        gtin_e = tk.Entry(form_frame, width=15); gtin_e.grid(row=0, column=5)
 
-        tk.Label(form_frame, text="РЦ").grid(row=0, column=6, padx=5, pady=5)
-        rc_e = tk.Entry(form_frame, width=15); rc_e.grid(row=0, column=7)
+        tk.Label(form_frame, text="Кол-во (шт)").grid(row=0, column=6, padx=5, pady=5)
+        qty_e = tk.Entry(form_frame, width=10); qty_e.grid(row=0, column=7)
+
+        tk.Label(form_frame, text="РЦ").grid(row=0, column=8, padx=5, pady=5)
+        rc_e = tk.Entry(form_frame, width=15); rc_e.grid(row=0, column=9)
 
         def add_order():
-            data = {"num": num_e.get(), "product": prod_e.get(), "units": int(qty_e.get() or 0), "rc": rc_e.get()}
+            data = {"num": num_e.get(), "product": prod_e.get(), "gtin": gtin_e.get(), "units": int(qty_e.get() or 0), "rc": rc_e.get()}
             try:
                 requests.post(f"{self.url_var.get().strip()}/add_order", json=data, timeout=5)
                 self.load_orders()
@@ -266,8 +272,8 @@ class AdminDashboard:
         order_table_frame = tk.Frame(self.tab_wms)
         order_table_frame.pack(expand=True, fill="both", padx=20, pady=10)
 
-        self.order_tree = ttk.Treeview(order_table_frame, columns=("NUM", "PROD", "QTY", "RC", "STATUS"), show="headings")
-        self.order_tree.heading("NUM", text="№"); self.order_tree.heading("PROD", text="Товар")
+        self.order_tree = ttk.Treeview(order_table_frame, columns=("NUM", "PROD", "GTIN", "QTY", "RC", "STATUS"), show="headings")
+        self.order_tree.heading("NUM", text="№"); self.order_tree.heading("PROD", text="Товар"); self.order_tree.heading("GTIN", text="GTIN")
         self.order_tree.heading("QTY", text="Кол-во"); self.order_tree.heading("RC", text="РЦ"); self.order_tree.heading("STATUS", text="Статус")
         self.order_tree.pack(side="left", expand=True, fill="both")
 
@@ -315,7 +321,7 @@ class AdminDashboard:
     def _fill_orders(self, data):
         for item in self.order_tree.get_children(): self.order_tree.delete(item)
         for o in data:
-            self.order_tree.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc'], o['status']))
+            self.order_tree.insert("", "end", values=(o['num'], o['product'], o.get('gtin', ''), o['units'], o['rc'], o['status']))
 
     def change_lang(self, lang):
         self.lang = lang

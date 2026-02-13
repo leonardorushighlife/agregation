@@ -30,6 +30,7 @@ class WarehouseManager:
             CREATE TABLE IF NOT EXISTS wh_units (
                 cis TEXT PRIMARY KEY,
                 box_sscc TEXT,
+                gtin TEXT,
                 receive_time DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -38,6 +39,7 @@ class WarehouseManager:
             CREATE TABLE IF NOT EXISTS wh_boxes (
                 sscc TEXT PRIMARY KEY,
                 pallet_sscc TEXT,
+                gtin TEXT,
                 status TEXT DEFAULT 'in_stock',
                 receive_time DATETIME DEFAULT CURRENT_TIMESTAMP,
                 ship_time DATETIME
@@ -47,6 +49,7 @@ class WarehouseManager:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_pallets (
                 sscc TEXT PRIMARY KEY,
+                gtin TEXT,
                 status TEXT DEFAULT 'in_stock',
                 receive_time DATETIME DEFAULT CURRENT_TIMESTAMP,
                 ship_time DATETIME
@@ -58,6 +61,7 @@ class WarehouseManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_num TEXT UNIQUE,
                 product_name TEXT,
+                gtin TEXT,
                 total_units INTEGER,
                 destination_rc TEXT,
                 status TEXT DEFAULT 'pending',
@@ -75,6 +79,17 @@ class WarehouseManager:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Миграции
+        try: cursor.execute("ALTER TABLE wh_units ADD COLUMN gtin TEXT")
+        except: pass
+        try: cursor.execute("ALTER TABLE wh_boxes ADD COLUMN gtin TEXT")
+        except: pass
+        try: cursor.execute("ALTER TABLE wh_pallets ADD COLUMN gtin TEXT")
+        except: pass
+        try: cursor.execute("ALTER TABLE wh_orders ADD COLUMN gtin TEXT")
+        except: pass
+
         conn.commit()
 
     def import_aggregation(self, file_path):
@@ -90,8 +105,6 @@ class WarehouseManager:
             if "<?xml" in content or "<unit_pack>" in content:
                 return self._import_xml(content)
             else:
-                # Возможно, это какой-то другой текстовый формат,
-                # но по ТЗ агрегация - это XML в TXT.
                 return False, "Unknown format"
         except Exception as e:
             return False, str(e)
@@ -106,40 +119,43 @@ class WarehouseManager:
                 cursor = conn.cursor()
                 for pack in root.findall(".//pack_content"):
                     box_sscc = pack.find("pack_code").text
-                    # Если это палета, в ней лежат SSCC коробов, но структура та же
-                    # Нам нужно понять, что мы импортируем.
-                    # По ТЗ "подгружаются файлы агрегации первого уровня (юниты в короба)".
 
-                    cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc) VALUES (?)", (box_sscc,))
+                    cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc, status) VALUES (?, 'in_stock')", (box_sscc,))
                     count_boxes += 1
 
                     for cis in pack.findall("cis"):
                         unit_cis = cis.text
-                        cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)",
-                                       (unit_cis, box_sscc))
+                        gtin = unit_cis[2:16] if unit_cis.startswith("01") else None
+                        cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc, gtin) VALUES (?, ?, ?)",
+                                       (unit_cis, box_sscc, gtin))
+
+                        # Если GTIN коробки еще не установлен, устанавливаем из первого юнита
+                        if gtin:
+                            cursor.execute("UPDATE wh_boxes SET gtin = ? WHERE sscc = ? AND gtin IS NULL", (gtin, box_sscc))
+
                         count_units += 1
                 conn.commit()
             return True, f"Imported {count_boxes} boxes and {count_units} units"
         except Exception as e:
             return False, f"XML Error: {e}"
 
-    def register_pallet(self, pallet_sscc, box_ssccs):
+    def register_pallet(self, pallet_sscc, box_ssccs, gtin=None):
         """Регистрация палеты и привязка к ней коробов"""
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc) VALUES (?)", (pallet_sscc,))
+        cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (pallet_sscc, gtin))
         for box_sscc in box_ssccs:
-            cursor.execute("UPDATE wh_boxes SET pallet_sscc = ?, status = 'in_stock' WHERE sscc = ?", (pallet_sscc, box_sscc))
+            cursor.execute("UPDATE wh_boxes SET pallet_sscc = ?, status = 'in_stock', gtin = ? WHERE sscc = ?", (pallet_sscc, gtin, box_sscc))
             # Если короба еще не было в базе (не импортировали), создаем
-            cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc, pallet_sscc, status) VALUES (?, ?, 'in_stock')",
-                           (box_sscc, pallet_sscc))
+            cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc, pallet_sscc, status, gtin) VALUES (?, ?, 'in_stock', ?)",
+                           (box_sscc, pallet_sscc, gtin))
         conn.commit()
 
-    def acceptance_box(self, sscc):
+    def acceptance_box(self, sscc, gtin=None):
         """Приемка одиночного короба"""
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO wh_boxes (sscc, status) VALUES (?, 'in_stock')", (sscc,))
+        cursor.execute("INSERT OR REPLACE INTO wh_boxes (sscc, status, gtin) VALUES (?, 'in_stock', ?)", (sscc, gtin))
         conn.commit()
         return True
 
@@ -147,7 +163,8 @@ class WarehouseManager:
         conn = self._get_conn()
         cursor = conn.cursor()
         for cis in unit_cis_list:
-            cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc) VALUES (?, ?)", (cis, box_sscc))
+            gtin = cis[2:16] if cis.startswith("01") else None
+            cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc, gtin) VALUES (?, ?, ?)", (cis, box_sscc, gtin))
         conn.commit()
 
     def shipment(self, sscc):
@@ -230,26 +247,26 @@ class WarehouseManager:
             "returned_today": history_today.get("returned", 0)
         }
 
-    def add_order(self, order_num, product_name="", total_units=0, destination_rc=""):
+    def add_order(self, order_num, product_name="", total_units=0, destination_rc="", gtin=None):
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO wh_orders (order_num, product_name, total_units, destination_rc, status)
-            VALUES (?, ?, ?, ?, 'pending')
-        """, (order_num, product_name, total_units, destination_rc))
+            INSERT OR REPLACE INTO wh_orders (order_num, product_name, total_units, destination_rc, status, gtin)
+            VALUES (?, ?, ?, ?, 'pending', ?)
+        """, (order_num, product_name, total_units, destination_rc, gtin))
         conn.commit()
 
     def get_pending_orders(self):
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT order_num, product_name, total_units, destination_rc FROM wh_orders WHERE status = 'pending'")
-        return [dict(zip(["num", "product", "units", "rc"], row)) for row in cursor.fetchall()]
+        cursor.execute("SELECT order_num, product_name, total_units, destination_rc, gtin, status FROM wh_orders WHERE status != 'completed'")
+        return [dict(zip(["num", "product", "units", "rc", "gtin", "status"], row)) for row in cursor.fetchall()]
 
     def get_shipped_orders(self):
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT order_num, product_name, total_units, destination_rc FROM wh_orders WHERE status = 'completed'")
-        return [dict(zip(["num", "product", "units", "rc"], row)) for row in cursor.fetchall()]
+        cursor.execute("SELECT order_num, product_name, total_units, destination_rc, gtin, status FROM wh_orders WHERE status = 'completed'")
+        return [dict(zip(["num", "product", "units", "rc", "gtin", "status"], row)) for row in cursor.fetchall()]
 
     def get_order_shipped_count(self, order_num):
         conn = self._get_conn()
@@ -261,8 +278,6 @@ class WarehouseManager:
             JOIN wh_orders o ON h.order_id = o.id
             WHERE o.order_num = ? AND h.action = 'shipped'
         """, (order_num,))
-        # Это упрощенная логика, может считать дубли если история сложная.
-        # Но для начала сойдет.
         row = cursor.fetchone()
         return row[0] if row else 0
 
@@ -283,6 +298,21 @@ class WarehouseManager:
         cursor = conn.cursor()
         cursor.execute("UPDATE wh_orders SET status = ? WHERE order_num = ?", (status, order_num))
         conn.commit()
+
+    def get_sscc_info(self, sscc):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        # Проверяем палету
+        cursor.execute("SELECT gtin, status FROM wh_pallets WHERE sscc = ?", (sscc,))
+        row = cursor.fetchone()
+        if row: return {"type": "pallet", "gtin": row[0], "status": row[1]}
+
+        # Проверяем коробку
+        cursor.execute("SELECT gtin, status FROM wh_boxes WHERE sscc = ?", (sscc,))
+        row = cursor.fetchone()
+        if row: return {"type": "box", "gtin": row[0], "status": row[1]}
+
+        return None
 
     def get_sscc_content(self, sscc):
         conn = self._get_conn()
@@ -317,52 +347,28 @@ class WarehouseManager:
                        (code, item_type, action, order_id))
         conn.commit()
 
-    def get_history_report(self, start_date=None):
-        """Отчет о движении товара"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        query = "SELECT action, item_type, COUNT(*) FROM wh_history"
-        if start_date:
-            query += f" WHERE timestamp >= '{start_date}'"
-        query += " GROUP BY action, item_type"
-        cursor.execute(query)
-        return cursor.fetchall()
-
-    def export_orders_json(self, path):
-        orders = self.get_pending_orders()
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(orders, f, ensure_ascii=False, indent=2)
-
-    def import_orders_json(self, path):
-        with open(path, "r", encoding="utf-8") as f:
-            orders = json.load(f)
-            for o in orders:
-                self.add_order(o['num'], o['product'], int(o['units']), o['rc'])
-
     def sync_orders(self, server_orders):
-        """server_orders: list of dicts with num, product, units, rc, status"""
+        """server_orders: list of dicts with num, product, units, rc, status, gtin"""
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        # 1. Получаем все локальные номера заказов
         cursor.execute("SELECT order_num FROM wh_orders")
         local_nums = {row[0] for row in cursor.fetchall()}
 
         server_nums = {o['num'] for o in server_orders}
 
-        # 2. Обновляем/Добавляем из сервера
         for o in server_orders:
             cursor.execute("""
-                INSERT INTO wh_orders (order_num, product_name, total_units, destination_rc, status)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO wh_orders (order_num, product_name, total_units, destination_rc, status, gtin)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(order_num) DO UPDATE SET
                     product_name=excluded.product_name,
                     total_units=excluded.total_units,
                     destination_rc=excluded.destination_rc,
-                    status=excluded.status
-            """, (o['num'], o['product'], o['units'], o['rc'], o['status']))
+                    status=excluded.status,
+                    gtin=excluded.gtin
+            """, (o['num'], o['product'], o['units'], o['rc'], o['status'], o.get('gtin')))
 
-        # 3. Если заказ пропал с сервера и он был pending - удаляем
         for num in local_nums:
             if num not in server_nums:
                 cursor.execute("DELETE FROM wh_orders WHERE order_num = ? AND status = 'pending'", (num,))
