@@ -90,8 +90,25 @@ def update_status():
 def admin_add_order():
     o = request.json
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc) VALUES (?,?,?,?)",
+        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc, status) VALUES (?,?,?,?,'pending')",
                      (o['num'], o['product'], o['units'], o['rc']))
+        conn.commit()
+    return jsonify({"status": "ok"})
+
+@app.route('/delete_order', methods=['POST'])
+def admin_delete_order():
+    num = request.json.get('num')
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM admin_orders WHERE order_num = ?", (num,))
+        conn.commit()
+    return jsonify({"status": "ok"})
+
+@app.route('/update_order_status', methods=['POST'])
+def admin_update_order_status():
+    num = request.json.get('num')
+    status = request.json.get('status')
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE admin_orders SET status = ? WHERE order_num = ?", (status, num))
         conn.commit()
     return jsonify({"status": "ok"})
 
@@ -246,12 +263,44 @@ class AdminDashboard:
         tk.Button(form_frame, text="Добавить", command=add_order, bg="#2ecc71", fg="white").grid(row=0, column=8, padx=10)
 
         # Orders Table
-        self.order_tree = ttk.Treeview(self.tab_wms, columns=("NUM", "PROD", "QTY", "RC", "STATUS"), show="headings")
+        order_table_frame = tk.Frame(self.tab_wms)
+        order_table_frame.pack(expand=True, fill="both", padx=20, pady=10)
+
+        self.order_tree = ttk.Treeview(order_table_frame, columns=("NUM", "PROD", "QTY", "RC", "STATUS"), show="headings")
         self.order_tree.heading("NUM", text="№"); self.order_tree.heading("PROD", text="Товар")
         self.order_tree.heading("QTY", text="Кол-во"); self.order_tree.heading("RC", text="РЦ"); self.order_tree.heading("STATUS", text="Статус")
-        self.order_tree.pack(expand=True, fill="both", padx=20, pady=10)
+        self.order_tree.pack(side="left", expand=True, fill="both")
 
-        tk.Button(self.tab_wms, text="Обновить список заказов", command=self.load_orders).pack(pady=10)
+        o_vsb = ttk.Scrollbar(order_table_frame, orient="vertical", command=self.order_tree.yview)
+        self.order_tree.configure(yscrollcommand=o_vsb.set)
+        o_vsb.pack(side="right", fill="y")
+
+        btn_wms = tk.Frame(self.tab_wms, bg="#f5f5f5")
+        btn_wms.pack(fill="x", pady=10, padx=20)
+
+        tk.Button(btn_wms, text="Обновить список", command=self.load_orders, bg="#3498db", fg="white").pack(side="left", padx=5)
+
+        def delete_o():
+            sel = self.order_tree.selection()
+            if not sel: return
+            num = self.order_tree.item(sel[0])['values'][0]
+            if messagebox.askyesno("Удаление", f"Удалить заказ {num}?"):
+                try:
+                    requests.post(f"{self.url_var.get().strip()}/delete_order", json={"num": num}, timeout=5)
+                    self.load_orders()
+                except: pass
+
+        def complete_o():
+            sel = self.order_tree.selection()
+            if not sel: return
+            num = self.order_tree.item(sel[0])['values'][0]
+            try:
+                requests.post(f"{self.url_var.get().strip()}/update_order_status", json={"num": num, "status": "completed"}, timeout=5)
+                self.load_orders()
+            except: pass
+
+        tk.Button(btn_wms, text="УДАЛИТЬ", command=delete_o, bg="#e74c3c", fg="white").pack(side="right", padx=5)
+        tk.Button(btn_wms, text="ЗАВЕРШИТЬ", command=complete_o, bg="#f39c12", fg="white").pack(side="right", padx=5)
 
     def load_orders(self):
         def _fetch():

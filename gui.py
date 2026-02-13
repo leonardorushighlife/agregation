@@ -1056,32 +1056,47 @@ class App:
 
     def select_order_dialog(self):
         t = TEXT[self.lang]
-        orders = self.warehouse.get_pending_orders()
+        pending_orders = self.warehouse.get_pending_orders()
+        shipped_orders = self.warehouse.get_shipped_orders()
 
         win = tk.Toplevel(self.root)
         win.title(t["lbl_order_select"])
-        win.geometry("600x400")
+        win.geometry("700x500")
 
-        tk.Label(win, text=t["lbl_order_select"], font=("Arial", 12, "bold")).pack(pady=10)
+        nb = ttk.Notebook(win)
+        nb.pack(expand=True, fill="both", padx=10, pady=10)
+
+        tab1 = tk.Frame(nb)
+        tab2 = tk.Frame(nb)
+        nb.add(tab1, text=t.get("wh_order", "Order"))
+        nb.add(tab2, text=t.get("wh_shipped", "Shipped"))
 
         cols = ("NUM", "PRODUCT", "UNITS", "RC")
-        tree = ttk.Treeview(win, columns=cols, show="headings")
-        tree.heading("NUM", text="№")
-        tree.heading("PRODUCT", text="Товар")
-        tree.heading("UNITS", text="Кол-во")
-        tree.heading("RC", text="РЦ")
-        tree.column("NUM", width=80); tree.column("PRODUCT", width=200); tree.column("UNITS", width=100); tree.column("RC", width=150)
 
-        for o in orders:
+        # Tab 1: Pending
+        tree = ttk.Treeview(tab1, columns=cols, show="headings")
+        tree.heading("NUM", text="№"); tree.heading("PRODUCT", text="Товар"); tree.heading("UNITS", text="Кол-во"); tree.heading("RC", text="РЦ")
+        tree.column("NUM", width=80); tree.column("PRODUCT", width=200); tree.column("UNITS", width=100); tree.column("RC", width=150)
+        for o in pending_orders:
             tree.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc']))
-        tree.pack(expand=True, fill="both", padx=10)
+        tree.pack(expand=True, fill="both")
+
+        # Tab 2: Shipped
+        tree2 = ttk.Treeview(tab2, columns=cols, show="headings")
+        tree2.heading("NUM", text="№"); tree2.heading("PRODUCT", text="Товар"); tree2.heading("UNITS", text="Кол-во"); tree2.heading("RC", text="РЦ")
+        tree2.column("NUM", width=80); tree2.column("PRODUCT", width=200); tree2.column("UNITS", width=100); tree2.column("RC", width=150)
+        for o in shipped_orders:
+            tree2.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc']))
+        tree2.pack(expand=True, fill="both")
 
         def select():
-            sel = tree.selection()
+            orders = pending_orders + shipped_orders
+            sel = tree.selection() or tree2.selection()
             if not sel:
                 messagebox.showwarning(t["error"], t["err_no_order"])
                 return
-            vals = tree.item(sel[0])['values']
+            source = tree if tree.selection() else tree2
+            vals = source.item(sel[0])['values']
             # Находим оригинальный объект заказа
             self.current_order_data = next(o for o in orders if o['num'] == str(vals[0]))
             self.current_order = self.current_order_data['num']
@@ -1164,7 +1179,12 @@ class App:
             self.send_to_telegram(files)
 
             if self.agg_mode == "warehouse_ship" and self.current_order:
-                self.warehouse.complete_order(self.current_order)
+                # Проверяем, полностью ли отгружен заказ
+                shipped = self.warehouse.get_order_shipped_count(self.current_order)
+                total = int(self.current_order_data.get('units', 0))
+                if shipped >= total:
+                    self.warehouse.complete_order(self.current_order)
+
                 # Отправка спец сообщения в ТГ
                 self.send_shipment_summary_tg()
                 self.current_order = None
@@ -1325,9 +1345,7 @@ class App:
                 resp = requests.get(f"{lic_srv}/get_orders", timeout=10)
                 if resp.status_code == 200:
                     orders = resp.json()
-                    for o in orders:
-                        # Добавляем в локальную базу склада
-                        self.warehouse.add_order(o['num'], o['product'], int(o['units']), o['rc'])
+                    self.warehouse.sync_orders(orders)
             except:
                 pass
             time.sleep(60) # Синхронизация раз в минуту
@@ -1470,8 +1488,12 @@ class App:
             if ok:
                 # Записываем в историю
                 self.warehouse.record_history(raw, item_type, "shipped", self.current_order)
-                # Добавляем в текущее состояние смены для отчета
-                self.state.scan_unit({"clean": raw, "raw": raw, "gtin": "SHIPMENT"})
+
+                # Добавляем в текущее состояние смены для отчета (как закрытый короб)
+                content = self.warehouse.get_sscc_content(raw)
+                parsed_content = [{"clean": c, "raw": c, "gtin": ""} for c in content]
+                self.state.boxes_data.append((raw, parsed_content))
+                self.state.total_codes_in_shift += len(parsed_content)
 
                 self.show_last(f"{t.get('wh_shipped', 'SHIPPED')}: {raw}")
                 # Уведомление в TG

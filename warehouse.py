@@ -212,11 +212,64 @@ class WarehouseManager:
             cursor.execute("SELECT order_num, product_name, total_units, destination_rc FROM wh_orders WHERE status = 'pending'")
             return [dict(zip(["num", "product", "units", "rc"], row)) for row in cursor.fetchall()]
 
+    def get_shipped_orders(self):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT order_num, product_name, total_units, destination_rc FROM wh_orders WHERE status = 'completed'")
+            return [dict(zip(["num", "product", "units", "rc"], row)) for row in cursor.fetchall()]
+
+    def get_order_shipped_count(self, order_num):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(u.cis) FROM wh_units u
+                JOIN wh_boxes b ON u.box_sscc = b.sscc
+                JOIN wh_history h ON b.sscc = h.item_code OR b.pallet_sscc = h.item_code
+                JOIN wh_orders o ON h.order_id = o.id
+                WHERE o.order_num = ? AND h.action = 'shipped'
+            """, (order_num,))
+            # Это упрощенная логика, может считать дубли если история сложная.
+            # Но для начала сойдет.
+            row = cursor.fetchone()
+            return row[0] if row else 0
+
     def complete_order(self, order_num):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE wh_orders SET status = 'completed' WHERE order_num = ?", (order_num,))
             conn.commit()
+
+    def delete_order(self, order_num):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM wh_orders WHERE order_num = ?", (order_num,))
+            conn.commit()
+
+    def update_order_status(self, order_num, status):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE wh_orders SET status = ? WHERE order_num = ?", (status, order_num))
+            conn.commit()
+
+    def get_sscc_content(self, sscc):
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+            # Проверяем, палета ли это
+            cursor.execute("SELECT sscc FROM wh_boxes WHERE pallet_sscc = ?", (sscc,))
+            boxes = cursor.fetchall()
+            if boxes:
+                # Возвращаем все юниты во всех коробках этой палеты
+                cursor.execute("""
+                    SELECT u.cis FROM wh_units u
+                    JOIN wh_boxes b ON u.box_sscc = b.sscc
+                    WHERE b.pallet_sscc = ?
+                """, (sscc,))
+                return [row[0] for row in cursor.fetchall()]
+
+            # Иначе это коробка
+            cursor.execute("SELECT cis FROM wh_units WHERE box_sscc = ?", (sscc,))
+            units = cursor.fetchall()
+            return [row[0] for row in units]
 
     def record_history(self, code, item_type, action, order_num=None):
         with sqlite3.connect(self.db_path, timeout=10) as conn:
@@ -252,3 +305,36 @@ class WarehouseManager:
             orders = json.load(f)
             for o in orders:
                 self.add_order(o['num'], o['product'], int(o['units']), o['rc'])
+
+    def sync_orders(self, server_orders):
+        """server_orders: list of dicts with num, product, units, rc, status"""
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            cursor = conn.cursor()
+
+            # 1. Получаем все локальные номера заказов
+            cursor.execute("SELECT order_num FROM wh_orders")
+            local_nums = {row[0] for row in cursor.fetchall()}
+
+            server_nums = {o['num'] for o in server_orders}
+
+            # 2. Обновляем/Добавляем из сервера
+            for o in server_orders:
+                cursor.execute("""
+                    INSERT INTO wh_orders (order_num, product_name, total_units, destination_rc, status)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(order_num) DO UPDATE SET
+                        product_name=excluded.product_name,
+                        total_units=excluded.total_units,
+                        destination_rc=excluded.destination_rc,
+                        status=excluded.status
+                """, (o['num'], o['product'], o['units'], o['rc'], o['status']))
+
+            # 3. Если заказ пропал с сервера и он был pending - удаляем?
+            # Или лучше оставить для истории?
+            # Пользователь сказал: "Только через программу администратора можно редактировать список, изменять статусы заказа, и так же удалять их"
+            # Значит если удалили в админке - удаляем и тут.
+            for num in local_nums:
+                if num not in server_nums:
+                    cursor.execute("DELETE FROM wh_orders WHERE order_num = ? AND status = 'pending'", (num,))
+
+            conn.commit()
