@@ -24,7 +24,6 @@ class WarehouseManager:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
-        # Юниты (DataMatrix)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_units (
                 code TEXT PRIMARY KEY,
@@ -36,7 +35,6 @@ class WarehouseManager:
             )
         """)
 
-        # Короба (SSCC)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_boxes (
                 sscc TEXT PRIMARY KEY,
@@ -47,7 +45,6 @@ class WarehouseManager:
             )
         """)
 
-        # Паллеты (SSCC)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_pallets (
                 sscc TEXT PRIMARY KEY,
@@ -57,7 +54,6 @@ class WarehouseManager:
             )
         """)
 
-        # Заказы
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +67,6 @@ class WarehouseManager:
             )
         """)
 
-        # История
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +79,6 @@ class WarehouseManager:
             )
         """)
 
-        # Восстановление
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recovery_shift (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,11 +92,15 @@ class WarehouseManager:
         conn.close()
 
     def check_duplicate(self, code):
-        """Проверка дубликата в основной таблице юнитов"""
         conn = self._get_conn()
         res = conn.execute("SELECT 1 FROM wh_units WHERE code = ?", (code,)).fetchone()
         if res:
-            raise ValueError("Дубликат кода маркировки")
+            return True
+        # Также проверяем в коробах на случай если сканируют SSCC как юнит
+        res = conn.execute("SELECT 1 FROM wh_boxes WHERE sscc = ?", (code,)).fetchone()
+        if res:
+            return True
+        return False
 
     def add_unit(self, code, gtin, serial, box_sscc=None, operator="", workplace=""):
         conn = self._get_conn()
@@ -126,29 +124,36 @@ class WarehouseManager:
         if not unit or unit[4] != 'in_stock':
             return False
 
-        conn.execute("UPDATE wh_units SET status = 'shipped' WHERE code = ?", (code,))
-        conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace, order_num) VALUES (?, 'shipped', ?, ?, ?)",
-                     (code, operator, workplace, order_num))
-        conn.execute("UPDATE wh_orders SET shipped_units = shipped_units + 1 WHERE order_num = ?", (order_num,))
-        conn.commit()
-        return True
+        try:
+            conn.execute("UPDATE wh_units SET status = 'shipped' WHERE code = ?", (code,))
+            conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace, order_num) VALUES (?, 'shipped', ?, ?, ?)",
+                         (code, operator, workplace, order_num))
+            conn.execute("UPDATE wh_orders SET shipped_units = shipped_units + 1 WHERE order_num = ?", (order_num,))
+            conn.commit()
+            return True
+        except:
+            return False
 
     def return_unit(self, code, operator="", workplace=""):
         conn = self._get_conn()
         unit = self.get_unit(code)
         if not unit or unit[4] != 'shipped':
             return False
-        conn.execute("UPDATE wh_units SET status = 'in_stock' WHERE code = ?", (code,))
-        conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace) VALUES (?, 'returned', ?, ?)",
-                     (code, operator, workplace))
-        conn.commit()
-        return True
+        try:
+            conn.execute("UPDATE wh_units SET status = 'in_stock' WHERE code = ?", (code,))
+            conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace) VALUES (?, 'returned', ?, ?)",
+                         (code, operator, workplace))
+            conn.commit()
+            return True
+        except:
+            return False
 
     def add_box(self, sscc, gtin, pallet_sscc=None, codes=None, operator="", workplace=""):
         conn = self._get_conn()
         try:
             is_pallet = False
             if codes and codes[0].startswith("00"): is_pallet = True
+
             if is_pallet:
                 conn.execute("INSERT INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (sscc, gtin))
                 for code in codes:
@@ -159,6 +164,7 @@ class WarehouseManager:
                 if codes:
                     for code in codes:
                         conn.execute("UPDATE wh_units SET box_sscc = ? WHERE code = ?", (sscc, code))
+
             conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace) VALUES (?, 'aggregated', ?, ?)",
                          (sscc, operator, workplace))
             conn.commit()

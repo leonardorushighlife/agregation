@@ -259,20 +259,23 @@ class App:
             elif mode == "returns": self.handle_returns(raw)
             elif mode == "acceptance": self.handle_acceptance(raw)
         except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+            messagebox.showerror(TEXT[self.lang]["error"], str(e))
         self.update_info()
 
     def handle_production(self, raw):
+        t = TEXT[self.lang]
         if self.state.wait_pallet_sscc:
             if not is_sscc(raw): raise ValueError("Ожидается SSCC паллеты (00...)")
-            self.wh.add_box(raw, self.config["gtin"], codes=self.current_boxes, operator=self.entry_name.get())
+            if not self.wh.add_box(raw, self.config["gtin"], codes=self.current_boxes, operator=self.entry_name.get()):
+                raise ValueError(t["err_duplicate"])
             self.current_boxes = []
             self.state.scan_pallet_sscc()
             self.print_label(raw, "PALLET")
             return
         if self.state.wait_sscc:
             if not is_sscc(raw): raise ValueError("Ожидается SSCC короба (00...)")
-            self.wh.add_box(raw, self.config["gtin"], codes=self.current_units, operator=self.entry_name.get())
+            if not self.wh.add_box(raw, self.config["gtin"], codes=self.current_units, operator=self.entry_name.get()):
+                 raise ValueError(t["err_duplicate"])
             self.current_boxes.append(raw)
             self.current_units = []
             self.state.scan_sscc()
@@ -281,12 +284,18 @@ class App:
         parsed = parse_gs1(raw)
         if self.config["gtin"] and parsed["gtin"] != self.config["gtin"]:
              raise ValueError(f"GTIN {parsed['gtin']} не совпадает с настройкой {self.config['gtin']}")
-        self.wh.check_duplicate(parsed["clean"])
-        self.wh.add_unit(parsed["clean"], parsed["gtin"], parsed["serial"], operator=self.entry_name.get())
+
+        if self.wh.check_duplicate(parsed["clean"]):
+            raise ValueError(t["err_duplicate"])
+
+        if not self.wh.add_unit(parsed["clean"], parsed["gtin"], parsed["serial"], operator=self.entry_name.get()):
+            raise ValueError(t["err_duplicate"])
+
         self.current_units.append(parsed["clean"])
         self.state.scan_unit()
 
     def handle_shipment(self, raw):
+        t = TEXT[self.lang]
         if is_sscc(raw):
              messagebox.showinfo("WMS", "Отгрузка агрегатом пока не поддерживается")
         else:
@@ -295,7 +304,7 @@ class App:
             if not order: raise ValueError("Нет заказов")
             if self.wh.ship_unit(parsed["clean"], order[1], operator=self.entry_name.get()):
                 self.stealth.send_message(f"📦 Отгружен {parsed['clean']}\nЗаказ: {order[1]}")
-            else: raise ValueError("Ошибка отгрузки")
+            else: raise ValueError("Ошибка отгрузки или дубликат")
 
     def handle_returns(self, raw):
         parsed = parse_gs1(raw)
@@ -304,10 +313,11 @@ class App:
         else: raise ValueError("Невозможно вернуть")
 
     def handle_acceptance(self, raw):
+        t = TEXT[self.lang]
         parsed = parse_gs1(raw)
         if self.wh.add_unit(parsed["clean"], parsed["gtin"], parsed["serial"], operator=self.entry_name.get()):
             messagebox.showinfo("WMS", "Приемка выполнена")
-        else: raise ValueError("Дубликат")
+        else: raise ValueError(t["err_duplicate"])
 
     def show_orders(self):
         win = tk.Toplevel(self.root)
