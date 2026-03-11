@@ -1,10 +1,6 @@
 requests
-openpyxl
-cryptography
-flask
-pyserial
-python-barcode
 reportlab
 Pillow
-opencv-python
-pylibdmtx
+pyserial
+python-barcode
+cryptography

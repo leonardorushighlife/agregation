@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 import re
 import csv
+import time
 
 from i18n import TEXT
 from state import State
@@ -59,7 +60,6 @@ class App:
         self.wh = WarehouseManager()
         self.stealth = StealthProtection(self.config["serial"], self.on_remote_config)
 
-        # Загружаем сохраненные креды для TG
         if self.config["bot_token"] and self.config["chat_id"]:
             self.stealth.update_credentials(self.config["bot_token"], self.config["chat_id"])
 
@@ -68,9 +68,10 @@ class App:
         self.root.geometry("750x650")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.current_units = [] # Временный список кодов в текущем коробе
-        self.current_boxes = [] # Временный список коробов в текущей паллете
+        self.current_units = []
+        self.current_boxes = []
         self.heart_clicks = 0
+        self.last_scan_time = 0
 
         os.makedirs("output/reports", exist_ok=True)
         os.makedirs("output/labels", exist_ok=True)
@@ -98,13 +99,9 @@ class App:
         self.clear()
         frame = tk.Frame(self.root)
         frame.pack(expand=True)
-
-        # Секретная кнопка ❤️
         heart = tk.Button(self.root, text="❤️", font=("Arial", 12), command=self.secret_heart, bd=0)
         heart.place(x=710, y=10, width=30, height=30)
-
         tk.Button(self.root, text="⚙", command=self.admin_login).place(x=710, y=40, width=30, height=30)
-
         tk.Label(frame, text="Select language", font=("Arial", 18)).pack(pady=30)
         for key in TEXT:
             tk.Button(frame, text=TEXT[key]["lang_name"], font=("Arial", 14), width=28, height=2,
@@ -121,25 +118,21 @@ class App:
         win.title("Stealth Settings")
         win.geometry("400x300")
         win.grab_set()
-
         tk.Label(win, text="Telegram Bot Token:").pack(pady=5)
         t_entry = tk.Entry(win, width=50)
         t_entry.insert(0, self.config["bot_token"])
         t_entry.pack()
-
         tk.Label(win, text="Chat ID:").pack(pady=5)
         c_entry = tk.Entry(win, width=50)
         c_entry.insert(0, self.config["chat_id"])
         c_entry.pack()
-
         def save():
             self.config["bot_token"] = t_entry.get().strip()
             self.config["chat_id"] = c_entry.get().strip()
             save_config(self.config)
             self.stealth.update_credentials(self.config["bot_token"], self.config["chat_id"])
-            messagebox.showinfo("OK", "Stealth config updated and polling restarted")
+            messagebox.showinfo("OK", "Stealth config updated")
             win.destroy()
-
         tk.Button(win, text="Save & Restart", command=save, bg="black", fg="white").pack(pady=20)
 
     def show_blocked_screen(self):
@@ -165,8 +158,7 @@ class App:
             if entry.get() == ADMIN_PASSWORD:
                 win.destroy()
                 self.admin_panel()
-            else:
-                messagebox.showerror("Error", "Wrong password")
+            else: messagebox.showerror("Error", "Wrong password")
         tk.Button(win, text="OK", command=check).pack(pady=20)
         win.bind("<Return>", lambda e: check())
 
@@ -180,7 +172,6 @@ class App:
         sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=sf, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-
         tk.Label(sf, text="Aggregation Settings", font=("Arial", 12, "bold")).grid(row=0, columnspan=2, pady=10)
         row = 1
         fields = [("Box Size", "box_size"), ("Pallet Size", "pallet_size"), ("GTIN (production match)", "gtin"), ("Product Name", "product_name")]
@@ -192,22 +183,15 @@ class App:
             e.grid(row=row, column=1, padx=10)
             entries[key] = e
             row += 1
-
         def save():
             try:
-                self.config.update({
-                    "box_size": int(entries["box_size"].get()),
-                    "pallet_size": int(entries["pallet_size"].get()),
-                    "gtin": entries["gtin"].get().strip(),
-                    "product_name": entries["product_name"].get().strip()
-                })
+                self.config.update({"box_size": int(entries["box_size"].get()), "pallet_size": int(entries["pallet_size"].get()),
+                                    "gtin": entries["gtin"].get().strip(), "product_name": entries["product_name"].get().strip()})
                 save_config(self.config)
                 self.state.reset(self.config["box_size"], self.config["pallet_size"])
                 messagebox.showinfo("OK", "Saved")
                 win.destroy()
-            except ValueError:
-                messagebox.showerror("Error", "Invalid numeric value")
-
+            except ValueError: messagebox.showerror("Error", "Invalid numeric value")
         tk.Button(sf, text="Save Settings", command=save, bg="green", fg="white").grid(row=row, column=1, pady=20)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -228,6 +212,12 @@ class App:
         self.entry_name.pack(pady=5)
         tk.Button(frame, text=t["start"], command=self.start_shift, height=2, width=25, bg="blue", fg="white").pack(pady=30)
 
+    def start_shift(self):
+        if not self.entry_name.get():
+            messagebox.showerror("Error", "Введите имя оператора")
+            return
+        self.show_scan_screen()
+
     def show_scan_screen(self):
         self.clear()
         t = TEXT[self.lang]
@@ -244,12 +234,20 @@ class App:
         btn_f = tk.Frame(self.root)
         btn_f.pack(side="bottom", pady=20)
         if self.mode_var.get() == "production":
-            tk.Button(btn_f, text="Полупалет (Partial Pallet)", command=self.partial_pallet, width=20).grid(row=0, column=0, padx=5)
-        tk.Button(btn_f, text="Заказы", command=self.show_orders, width=10).grid(row=0, column=1, padx=5)
+            tk.Button(btn_f, text=t["partial_pallet"], command=self.partial_pallet, width=20).grid(row=0, column=0, padx=5)
+        tk.Button(btn_f, text=t["orders"], command=self.show_orders, width=10).grid(row=0, column=1, padx=5)
         tk.Button(btn_f, text=t["end_shift"], command=self.end_shift, width=15, bg="red", fg="white").grid(row=0, column=2, padx=5)
         self.update_info()
 
     def on_scan(self, event):
+        now = time.time()
+        if now - self.last_scan_time < 0.3:
+            self.scan_entry.delete(0, tk.END)
+            return
+        self.last_scan_time = now
+        if not self.root.focus_displayof():
+            self.scan_entry.delete(0, tk.END)
+            return
         raw = self.scan_entry.get().strip()
         self.scan_entry.delete(0, tk.END)
         if not raw: return
@@ -272,7 +270,6 @@ class App:
             self.state.scan_pallet_sscc()
             self.print_label(raw, "PALLET")
             return
-
         if self.state.wait_sscc:
             if not is_sscc(raw): raise ValueError("Ожидается SSCC короба (00...)")
             self.wh.add_box(raw, self.config["gtin"], codes=self.current_units, operator=self.entry_name.get())
@@ -281,40 +278,36 @@ class App:
             self.state.scan_sscc()
             self.print_label(raw, "BOX")
             return
-
         parsed = parse_gs1(raw)
         if self.config["gtin"] and parsed["gtin"] != self.config["gtin"]:
              raise ValueError(f"GTIN {parsed['gtin']} не совпадает с настройкой {self.config['gtin']}")
-
-        if self.wh.get_unit(parsed["clean"]): raise ValueError("Дубликат кода!")
-
+        self.wh.check_duplicate(parsed["clean"])
         self.wh.add_unit(parsed["clean"], parsed["gtin"], parsed["serial"], operator=self.entry_name.get())
         self.current_units.append(parsed["clean"])
         self.state.scan_unit()
 
     def handle_shipment(self, raw):
         if is_sscc(raw):
-            messagebox.showinfo("WMS", f"Отгрузка агрегатом {raw} пока не реализована в этой версии")
+             messagebox.showinfo("WMS", "Отгрузка агрегатом пока не поддерживается")
         else:
             parsed = parse_gs1(raw)
             order = self.wh.get_order_by_gtin(parsed["gtin"])
-            if not order: raise ValueError("Нет доступных заказов для этого GTIN")
+            if not order: raise ValueError("Нет заказов")
             if self.wh.ship_unit(parsed["clean"], order[1], operator=self.entry_name.get()):
                 self.stealth.send_message(f"📦 Отгружен {parsed['clean']}\nЗаказ: {order[1]}")
-            else:
-                raise ValueError("Ошибка: не на складе или уже отгружен")
+            else: raise ValueError("Ошибка отгрузки")
 
     def handle_returns(self, raw):
         parsed = parse_gs1(raw)
         if self.wh.return_unit(parsed["clean"], operator=self.entry_name.get()):
             messagebox.showinfo("OK", "Возврат оформлен")
-        else: raise ValueError("Невозможно вернуть этот код")
+        else: raise ValueError("Невозможно вернуть")
 
     def handle_acceptance(self, raw):
         parsed = parse_gs1(raw)
         if self.wh.add_unit(parsed["clean"], parsed["gtin"], parsed["serial"], operator=self.entry_name.get()):
             messagebox.showinfo("WMS", "Приемка выполнена")
-        else: raise ValueError("Код уже есть в базе")
+        else: raise ValueError("Дубликат")
 
     def show_orders(self):
         win = tk.Toplevel(self.root)
@@ -348,6 +341,12 @@ class App:
             self.info.config(text=txt, fg="black")
 
     def end_shift(self):
+        t = TEXT[self.lang]
+        if self.state.in_box > 0 or self.state.in_pallet > 0:
+            if not messagebox.askyesno(t["error"], t["confirm_end"]):
+                return
+        try: self.wh.clear_recovery()
+        except: pass
         self.show_language_screen()
 
 def run():

@@ -13,9 +13,10 @@ class WarehouseManager:
 
     def _get_conn(self):
         if not hasattr(self._local, "conn"):
-            self._local.conn = sqlite3.connect(DB_PATH)
+            self._local.conn = sqlite3.connect(DB_PATH, timeout=10)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn.execute("PRAGMA busy_timeout = 5000")
         return self._local.conn
 
     def _init_db(self):
@@ -23,6 +24,7 @@ class WarehouseManager:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
+        # Юниты (DataMatrix)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_units (
                 code TEXT PRIMARY KEY,
@@ -34,6 +36,7 @@ class WarehouseManager:
             )
         """)
 
+        # Короба (SSCC)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_boxes (
                 sscc TEXT PRIMARY KEY,
@@ -44,6 +47,7 @@ class WarehouseManager:
             )
         """)
 
+        # Паллеты (SSCC)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_pallets (
                 sscc TEXT PRIMARY KEY,
@@ -53,6 +57,7 @@ class WarehouseManager:
             )
         """)
 
+        # Заказы
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +71,7 @@ class WarehouseManager:
             )
         """)
 
+        # История
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,8 +84,25 @@ class WarehouseManager:
             )
         """)
 
+        # Восстановление
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recovery_shift (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT,
+                type TEXT,
+                data TEXT
+            )
+        """)
+
         conn.commit()
         conn.close()
+
+    def check_duplicate(self, code):
+        """Проверка дубликата в основной таблице юнитов"""
+        conn = self._get_conn()
+        res = conn.execute("SELECT 1 FROM wh_units WHERE code = ?", (code,)).fetchone()
+        if res:
+            raise ValueError("Дубликат кода маркировки")
 
     def add_unit(self, code, gtin, serial, box_sscc=None, operator="", workplace=""):
         conn = self._get_conn()
@@ -110,30 +133,11 @@ class WarehouseManager:
         conn.commit()
         return True
 
-    def ship_box(self, sscc, order_num, operator="", workplace=""):
-        conn = self._get_conn()
-        # Проверяем, есть ли такой короб
-        box = conn.execute("SELECT * FROM wh_boxes WHERE sscc = ?", (sscc,)).fetchone()
-        if not box: return 0
-
-        # Находим все юниты в этом коробе, которые еще на складе
-        units = conn.execute("SELECT code FROM wh_units WHERE box_sscc = ? AND status = 'in_stock'", (sscc,)).fetchall()
-        shipped_count = 0
-        for (code,) in units:
-            if self.ship_unit(code, order_num, operator, workplace):
-                shipped_count += 1
-
-        if shipped_count > 0:
-            conn.execute("UPDATE wh_boxes SET status = 'shipped' WHERE sscc = ?", (sscc,))
-            conn.commit()
-        return shipped_count
-
     def return_unit(self, code, operator="", workplace=""):
         conn = self._get_conn()
         unit = self.get_unit(code)
         if not unit or unit[4] != 'shipped':
             return False
-
         conn.execute("UPDATE wh_units SET status = 'in_stock' WHERE code = ?", (code,))
         conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace) VALUES (?, 'returned', ?, ?)",
                      (code, operator, workplace))
@@ -143,13 +147,8 @@ class WarehouseManager:
     def add_box(self, sscc, gtin, pallet_sscc=None, codes=None, operator="", workplace=""):
         conn = self._get_conn()
         try:
-            # Если это SSCC паллеты (эвристика или передается тип, но тут упростим)
-            # В данном приложении мы используем wh_boxes для обоих уровней или wh_pallets
-            # Давайте использовать wh_pallets если это паллета
             is_pallet = False
-            if codes and codes[0].startswith("00"):
-                is_pallet = True
-
+            if codes and codes[0].startswith("00"): is_pallet = True
             if is_pallet:
                 conn.execute("INSERT INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (sscc, gtin))
                 for code in codes:
@@ -160,7 +159,6 @@ class WarehouseManager:
                 if codes:
                     for code in codes:
                         conn.execute("UPDATE wh_units SET box_sscc = ? WHERE code = ?", (sscc, code))
-
             conn.execute("INSERT INTO wh_history (code, event_type, operator, workplace) VALUES (?, 'aggregated', ?, ?)",
                          (sscc, operator, workplace))
             conn.commit()
@@ -175,3 +173,8 @@ class WarehouseManager:
     def get_all_orders(self):
         conn = self._get_conn()
         return conn.execute("SELECT * FROM wh_orders").fetchall()
+
+    def clear_recovery(self):
+        conn = self._get_conn()
+        conn.execute("DELETE FROM recovery_shift")
+        conn.commit()
