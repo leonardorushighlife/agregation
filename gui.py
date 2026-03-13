@@ -13,7 +13,6 @@ import re
 import openpyxl
 from cryptography.fernet import Fernet
 
-# Для звукового сигнала
 try:
     import winsound
 except ImportError:
@@ -212,7 +211,6 @@ class App:
     def clear(self):
         for w in self.root.winfo_children(): w.destroy()
     def show_language_screen(self):
-        # Убрали автоматический переход на RU при warehouse_enabled, чтобы EN работал
         self.clear(); t = TEXT.get(self.lang, TEXT["ru"]); frame = tk.Frame(self.root); frame.pack(expand=True)
         tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680, y=10, width=30, height=30)
         tk.Label(frame, text=t["select_lang"], font=("Arial", 18)).pack(pady=30)
@@ -373,29 +371,35 @@ class App:
     def show_shift_form(self):
         self.clear(); t = TEXT[self.lang]; tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680,y=10)
         f = tk.Frame(self.root); f.pack(expand=True)
-        tk.Label(f, text=t["date"]).pack(); e_d = tk.Entry(f, width=30); e_d.insert(0, datetime.now().strftime("%d.%m.%Y")); e_d.pack()
-        is_wh = self.config.get("warehouse_enabled")
-        if is_wh:
-            tk.Label(f, text="GTIN").pack(); e_w = tk.Entry(f, width=30); e_w.insert(0, self.config.get("gtin","")); e_w.pack()
-            tk.Label(f, text="Product").pack(); e_n = tk.Entry(f, width=30); e_n.insert(0, self.config.get("product_name","")); e_n.pack()
-        else:
-            tk.Label(f, text=t["workplace"]).pack(); e_w = tk.Entry(f, width=30); e_w.pack()
-            tk.Label(f, text=t["name"]).pack(); e_n = tk.Entry(f, width=30); e_n.pack()
+        tk.Label(f, text=TEXT["ru"]["precheck"], wraplength=640, font=("Arial", 14), justify="center").pack(pady=20)
+        e_d = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_d.insert(0, datetime.now().strftime("%d.%m.%Y")); e_d.pack(pady=5); tk.Label(f, text=t["date"]).pack(pady=5)
+        e_w = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_w.pack(pady=5); tk.Label(f, text=t["workplace"] if not self.config.get("warehouse_enabled") else "GTIN").pack(pady=5)
+        e_n = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_n.pack(pady=5); tk.Label(f, text=t["name"] if not self.config.get("warehouse_enabled") else "Product").pack(pady=5)
         self.entry_date, self.entry_wp, self.entry_name = e_d, e_w, e_n
-        tk.Button(f, text=t["start"], command=self.start_shift, width=20, height=2).pack(pady=20)
+        tk.Button(f, text=t["start"], command=self.start_shift, width=26, height=2, font=("Arial", 16)).pack(pady=30)
     def start_shift(self):
         self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
         self.state.reset(self.config["box_size"]); self.show_scan_screen()
     def show_scan_screen(self):
         self.clear(); self.scanning_active = True; t = TEXT[self.lang]
-        self.info = tk.Label(self.root, font=("Arial", 16)); self.info.pack(pady=20)
-        self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14)); self.last.pack(pady=15)
+        self.info = tk.Label(self.root, font=("Arial", 16)); self.info.pack(pady=25)
+        self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center"); self.last.pack(pady=15)
         self.scan_entry = tk.Entry(self.root); self.scan_entry.place(x=-100,y=-100); self.scan_entry.focus_set(); self.scan_entry.bind("<Return>", self.on_scan)
-        tk.Button(self.root, text=t["end_shift"], command=self.end_shift).pack(side="bottom", pady=20)
+        btn_f = tk.Frame(self.root); btn_f.pack(side="bottom", pady=20)
+        tk.Button(btn_f, text=t["pause"], width=16, command=self.pause).grid(row=0, column=0, padx=10)
+        tk.Button(btn_f, text=t["save"], width=16, command=self.save_now).grid(row=0, column=1, padx=10)
+        tk.Button(btn_f, text=t["end_shift"], width=18, command=self.end_shift).grid(row=0, column=2, padx=10)
         self.update_info()
     def on_scan(self, e): r = self.scan_entry.get(); self.scan_entry.delete(0, tk.END); self.process_barcode(r)
-    def end_shift(self): self.scanning_active = False; self.duplicates.clear_recovery(); self.show_language_screen()
-    def show_last(self, t): self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, t); self.last.config(state="readonly")
+    def end_shift(self):
+        t = TEXT[self.lang]
+        if self.state.in_box != 0: messagebox.showwarning(t["error"], t["need_close_box"]); return
+        if messagebox.askokcancel(t["end_shift"], t["confirm_end"]): self.scanning_active = False; self.duplicates.clear_recovery(); self.show_language_screen()
+    def show_last(self, t):
+        def _upd(): self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, t); self.last.config(state="readonly")
+        self.root.after(0, _upd)
+    def pause(self): self.paused = True; messagebox.askokcancel(TEXT[self.lang]["pause"], TEXT[self.lang]["resume"]); self.paused = False
+    def save_now(self): messagebox.showinfo(TEXT[self.lang]["success"], TEXT[self.lang]["saved"])
     def update_info(self):
         t = TEXT[self.lang]
         if self.state.wait_sscc: txt = t["wait_sscc_box"]
