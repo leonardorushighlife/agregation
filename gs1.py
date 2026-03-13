@@ -10,6 +10,14 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
     if not raw:
         raise GS1Error("err_empty")
 
+    if not strict:
+        return {
+            "gtin": "UNKNOWN",
+            "serial": "UNKNOWN",
+            "clean": raw,
+            "raw": raw
+        }
+
     # Предварительная очистка от пробелов и переносов строк в начале и конце.
     data = raw.strip(' \t\n\r\f\v')
 

@@ -125,16 +125,17 @@ class GlobalScannerListener:
         try:
             current_time = time.time()
             if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.5):
-                self.buffer = ""; self.key_times = []
+                self.buffer = ""
             is_enter = False
-            if keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"): is_enter = True
-            elif hasattr(key, 'char') and key.char in ['\r', '\n']: is_enter = True
+            if keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
+                is_enter = True
+            elif hasattr(key, 'char') and key.char in ['\r', '\n']:
+                is_enter = True
             if is_enter:
                 if self.buffer:
-                    if self.key_times:
-                        avg_time = sum(self.key_times) / len(self.key_times)
-                        if avg_time < 0.15: self.callback(self.buffer)
-                    self.buffer = ""; self.key_times = []; self.last_key_time = 0
+                    self.callback(self.buffer)
+                    self.buffer = ""
+                    self.last_key_time = 0
             elif hasattr(key, 'char') and key.char:
                 self.buffer += key.char
                 if self.last_key_time > 0: self.key_times.append(current_time - self.last_key_time)
@@ -418,19 +419,42 @@ class App:
             except: pass
             time.sleep(60)
     def process_barcode(self, r_in):
-        if not self.scanning_active or self.paused: return
-        now = time.time()
-        if now - self.last_scan_time < 0.3: return
-        self.last_scan_time = now
-        if not self.root.focus_displayof(): return
-        p = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in r_in])
-        parts = BARCODE_RE.findall(p) if BARCODE_RE.search(p) else [p.strip()]
-        for r in [x.strip() for x in parts if x.strip()]:
-            if self.agg_mode == "warehouse_return": self.on_scan_return(r)
-            elif self.agg_mode == "warehouse_box_acc": self.on_scan_box_acceptance(r)
-            elif self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode: self.on_scan_shipment(r)
-            elif self.state.mode == "pallet" or self.agg_mode == "warehouse_acc": self.on_scan_pallet(r)
-            else: self.on_scan_unit(r)
+        if not self.scanning_active or self.paused:
+            return
+        if not r_in:
+            return
+
+        p = "".join([LAYOUT_MAP.get(c, c) if ord(c) >= 32 else c for c in r_in])
+
+        # 1. Сначала разбиваем по явным разделителям строк
+        initial_parts = [part.strip() for part in p.replace('\r', '\n').split('\n') if part.strip()]
+
+        final_parts = []
+        for part in initial_parts:
+            # 2. Ищем склеенные коды (начинающиеся на 01...21 или 00...)
+            # Паттерн: AI 01 (14 цифр) + AI 21 ИЛИ SSCC (18 цифр)
+            matches = list(re.finditer(r'(?:\(?01\)?\d{14}\(?21\)?|(?:\(?00\)?\d{18}))', part))
+            if len(matches) > 1:
+                last_idx = 0
+                for i in range(1, len(matches)):
+                    start = matches[i].start()
+                    final_parts.append(part[last_idx:start])
+                    last_idx = start
+                final_parts.append(part[last_idx:])
+            else:
+                final_parts.append(part)
+
+        for r in [x.strip() for x in final_parts if x.strip()]:
+            if self.agg_mode == "warehouse_return":
+                self.on_scan_return(r)
+            elif self.agg_mode == "warehouse_box_acc":
+                self.on_scan_box_acceptance(r)
+            elif self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
+                self.on_scan_shipment(r)
+            elif self.state.mode == "pallet" or self.agg_mode == "warehouse_acc":
+                self.on_scan_pallet(r)
+            else:
+                self.on_scan_unit(r)
     def on_scan_unit(self, r):
         t = TEXT[self.lang]
         if self.state.wait_sscc:
@@ -584,13 +608,13 @@ class App:
         self.clear(); self.scanning_active = True; t = TEXT[self.lang]
         self.info = tk.Label(self.root, font=("Arial", 16)); self.info.pack(pady=25)
         self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center"); self.last.pack(pady=15)
-        self.scan_entry = tk.Entry(self.root); self.scan_entry.place(x=-100,y=-100); self.scan_entry.focus_set(); self.scan_entry.bind("<Return>", self.on_scan)
+        # Hidden entry to keep focus, but we rely on GlobalScannerListener for actual input
+        self.scan_entry = tk.Entry(self.root); self.scan_entry.place(x=-100,y=-100); self.scan_entry.focus_set()
         btn_f = tk.Frame(self.root); btn_f.pack(side="bottom", pady=20)
         tk.Button(btn_f, text=t["pause"], width=16, command=self.pause).grid(row=0, column=0, padx=10)
         tk.Button(btn_f, text=t["save"], width=16, command=self.save_now).grid(row=0, column=1, padx=10)
         tk.Button(btn_f, text=t["end_shift"], width=18, command=self.end_shift).grid(row=0, column=2, padx=10)
         self.update_info()
-    def on_scan(self, e): r = self.scan_entry.get(); self.scan_entry.delete(0, tk.END); self.process_barcode(r)
     def end_shift(self):
         t = TEXT[self.lang]
         if self.state.in_box != 0: messagebox.showwarning(t["error"], t["need_close_box"]); return
