@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 class ErrorLog:
     def __init__(self):
         self.items = []

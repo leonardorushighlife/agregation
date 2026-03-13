@@ -1,6 +1,13 @@
 requests
-reportlab
-Pillow
+openpyxl
+cryptography
+flask
+kivy
 pyserial
 python-barcode
-cryptography
+reportlab
+pywin32
+Pillow
+pynput
+opencv-python
+pylibdmtx

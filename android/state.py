@@ -1,13 +1,11 @@
 from datetime import datetime
 
 class State:
-    def __init__(self, box_size: int, mode="unit"):
-        self.mode = mode # "unit" или "pallet"
+    def __init__(self, box_size: int):
         self.box_size = box_size
-        self.reset(box_size, mode)
+        self.reset(box_size)
 
-    def reset(self, box_size: int, mode="unit"):
-        self.mode = mode
+    def reset(self, box_size: int):
         self.box_size = box_size
         self.box = 1
         self.in_box = 0

