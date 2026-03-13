@@ -40,11 +40,10 @@ class DuplicateChecker:
 
     def _get_conn(self):
         if not hasattr(self._local, "conn"):
-            # Добавлен timeout=10 для предотвращения "database is locked"
-            self._local.conn = sqlite3.connect(self.db_path, timeout=10)
+            self._local.conn = sqlite3.connect(self.db_path, timeout=30)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn.execute("PRAGMA busy_timeout = 5000")
+            self._local.conn.execute("PRAGMA cache_size=-64000") # 64MB cache
         return self._local.conn
 
     def _init_db(self):
@@ -229,7 +228,8 @@ class DuplicateChecker:
             if res.get("status") == "duplicate":
                 raise ValueError(res["details"])
             elif res.get("status") == "error":
-                # Если сервер недоступен, продолжаем работу локально
+                # Если сервер недоступен, продолжаем работу локально (или выбрасываем ошибку по желанию)
+                # Пользователь жаловался на задержку, поэтому важно не зависать.
                 print(f"Server check skipped/failed: {res.get('message')}")
 
             # В любом случае пишем в локальную БД для страховки
@@ -244,17 +244,9 @@ class DuplicateChecker:
             op, wp, sscc = row
             raise ValueError(f"DUPLICATE|{op or ''}|{wp or ''}|{sscc or ''}")
 
-        try:
-            cursor.execute("INSERT INTO seen_codes (code, operator, workplace) VALUES (?, ?, ?)",
-                           (code, operator, workplace))
-            conn.commit()
-        except sqlite3.IntegrityError:
-            # На случай гонки условий или параллельной вставки
-            cursor.execute("SELECT operator, workplace, sscc FROM seen_codes WHERE code = ?", (code,))
-            row = cursor.fetchone()
-            if row:
-                op, wp, sscc = row
-                raise ValueError(f"DUPLICATE|{op or ''}|{wp or ''}|{sscc or ''}")
+        cursor.execute("INSERT INTO seen_codes (code, operator, workplace) VALUES (?, ?, ?)",
+                       (code, operator, workplace))
+        conn.commit()
 
     def check_sscc(self, code):
         if self.is_server:
@@ -270,11 +262,8 @@ class DuplicateChecker:
         cursor = conn.cursor()
         cursor.execute("SELECT code FROM seen_sscc WHERE code = ?", (code,))
         if cursor.fetchone(): raise ValueError("Этот SSCC уже использовался")
-        try:
-            cursor.execute("INSERT INTO seen_sscc (code) VALUES (?)", (code,))
-            conn.commit()
-        except sqlite3.IntegrityError:
-             raise ValueError("Этот SSCC уже использовался")
+        cursor.execute("INSERT INTO seen_sscc (code) VALUES (?)", (code,))
+        conn.commit()
 
     def update_sscc_for_units(self, codes, sscc):
         if self.is_server:
@@ -309,11 +298,8 @@ class DuplicateChecker:
     def clear_recovery(self):
         conn = self._get_conn()
         cursor = conn.cursor()
-        try:
-            cursor.execute("DELETE FROM recovery_shift")
-            conn.commit()
-        except:
-            pass
+        cursor.execute("DELETE FROM recovery_shift")
+        conn.commit()
 
 def get_local_ip():
     try:
