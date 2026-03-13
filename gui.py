@@ -78,17 +78,18 @@ def load_config():
         "product_name": "", "product_enabled": False,
         "tnved": "", "tnved_enabled": False,
         "ds_number": "", "ds_enabled": False,
-        "tg_token": "", "tg_chat_id": "", "db_path": "data/duplicates.db",
+        "db_path": "data/duplicates.db",
         "is_server": False, "lockout_until": 0, "access_key": "SKLAD_1",
         "gs1_strict": True, "server_ip": "",
-        "license_server": "http://127.0.0.1:8080",
+        "license_server": "",
+        "tg_token": "", "tg_chat_id": "",
         "com_enabled": False, "com_port": "", "com_baud": 9600,
         "box_size_fixed": True,
         "conveyor_enabled": False, "conveyor_sscc_file": "",
         "printer_name": "", "label_width": 50, "label_height": 25,
         "label_additional_text": "",
-        "stealth_token": "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w",
-        "stealth_chat_id": "535900388",
+        "stealth_token": "",
+        "stealth_chat_id": "",
         "remote_blocked": False,
         "serial_number": "",
         "warehouse_enabled": False,
@@ -240,37 +241,102 @@ class App:
             else: lbl_timer.config(text=t["remaining_time"].format(f"{rem//60:02d}:{rem%60:02d}")); rem -= 1; win.after(1000, upd)
         upd()
     def admin_panel(self):
-        t = TEXT[self.lang]; win = tk.Toplevel(self.root); win.title(t["admin_panel_title"]); win.geometry("650x600")
-        canvas = tk.Canvas(win, bg="#f0f0f0"); scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview); sf = tk.Frame(canvas, bg="#f0f0f0")
-        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))); canvas.create_window((0,0), window=sf, anchor="nw"); canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y"); canvas.pack(side="left", expand=True, fill="both")
-        tk.Button(win, text="❤️", bd=0, command=self.on_hidden_click).place(x=600, y=0, width=30, height=30)
+        t = TEXT["ru"]
+        win = tk.Toplevel(self.root)
+        win.title(t["admin_panel_title"])
+        win.geometry("650x600")
+
+        canvas = tk.Canvas(win, bg="#f0f0f0")
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        sf = tk.Frame(canvas, bg="#f0f0f0")
+
+        sf.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=sf, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", expand=True, fill="both")
+
+        tk.Button(win, text="❤️", bd=0, bg="#f0f0f0", activebackground="#f0f0f0", command=self.on_hidden_click).place(x=600, y=0, width=30, height=30)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        win.bind_all("<MouseWheel>", _on_mousewheel)
+
         def block(tit, val, en, row):
-            tk.Label(sf, text=tit, bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10, pady=5); e = tk.Entry(sf, width=30); e.insert(0, str(val)); e.grid(row=row, column=1)
-            if en is not None: v = tk.BooleanVar(value=en); tk.Checkbutton(sf, variable=v, bg="#f0f0f0").grid(row=row, column=2); return e, v
+            tk.Label(sf, text=tit, bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            e = tk.Entry(sf, width=30)
+            e.insert(0, str(val))
+            e.grid(row=row, column=1)
+            if en is not None:
+                v = tk.BooleanVar(value=en)
+                tk.Checkbutton(sf, variable=v, bg="#f0f0f0").grid(row=row, column=2)
+                return e, v
             return e
-        row = 0; tk.Label(sf, text=t["admin_main_settings"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10); row += 1
-        box_e = block(t["admin_box_size"], self.config["box_size"], None, row); box_v = tk.BooleanVar(value=self.config.get("box_size_fixed", True)); tk.Checkbutton(sf, text="Fixed", variable=box_v, bg="#f0f0f0").grid(row=row, column=2); row += 1
+
+        row = 0
+        tk.Label(sf, text=t["admin_main_settings"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
+        row += 1
+        box_e = block(t["admin_box_size"], self.config["box_size"], None, row); box_v = tk.BooleanVar(value=self.config.get("box_size_fixed", True)); tk.Checkbutton(sf, text=t.get("admin_box_size_fixed", "Fixed"), variable=box_v, bg="#f0f0f0").grid(row=row, column=2); row += 1
         tin_e = block(t["admin_tin"], self.config["lp_tin"], None, row); row += 1
         gtin_e, gtin_v = block(t["admin_gtin"], self.config["gtin"], self.config["gtin_enabled"], row); row += 1
         prod_e, prod_v = block(t["admin_prod_name"], self.config["product_name"], self.config["product_enabled"], row); row += 1
         tnved_e, tnved_v = block(t["admin_tnved"], self.config["tnved"], self.config["tnved_enabled"], row); row += 1
         ds_e, ds_v = block(t["admin_ds"], self.config["ds_number"], self.config["ds_enabled"], row); row += 1
-        tk.Label(sf, text="Network & Serial", font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10); row += 1
+        tk.Label(sf, text=t["admin_network_tg"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10); row += 1
         srv_v = tk.BooleanVar(value=self.config.get("is_server", False)); tk.Checkbutton(sf, text=t["admin_use_srv"], variable=srv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
-        gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True)); tk.Checkbutton(sf, text="Strict GS1", variable=gs1_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
-        wh_v = tk.BooleanVar(value=self.config.get("warehouse_enabled", False)); tk.Checkbutton(sf, text="WMS Mode", variable=wh_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
-        cv_v = tk.BooleanVar(value=self.config.get("cv_mode_enabled", False)); tk.Checkbutton(sf, text="CV Mode", variable=cv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
-        ip_e = block("Server IP", self.config.get("server_ip", ""), None, row); row += 1
-        key_e = block("Access Key", self.config["access_key"], None, row); row += 1
-        com_v = tk.BooleanVar(value=self.config.get("com_enabled", False)); tk.Checkbutton(sf, text="Enable Serial", variable=com_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
-        p_var = tk.StringVar(value=self.config.get("com_port", "")); ttk.Combobox(sf, textvariable=p_var, values=self.get_ports(), width=27).grid(row=row, column=1); row += 1
-        baud_e = block("Baud", self.config.get("com_baud", 9600), None, row); row += 1
-        pr_var = tk.StringVar(value=self.config.get("printer_name", "")); tk.Entry(sf, textvariable=pr_var, width=30).grid(row=row, column=1); row += 1
+        gs1_v = tk.BooleanVar(value=self.config.get("gs1_strict", True)); tk.Checkbutton(sf, text=t["admin_gs1_strict"], variable=gs1_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+        wh_v = tk.BooleanVar(value=self.config.get("warehouse_enabled", False)); tk.Checkbutton(sf, text=t.get("admin_warehouse_enable", "Enable Warehouse Mode"), variable=wh_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+        cv_v = tk.BooleanVar(value=self.config.get("cv_mode_enabled", False)); tk.Checkbutton(sf, text=t.get("admin_cv_enable", "Enable Machine Vision"), variable=cv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+        cam_e = block("ID Камеры", self.config.get("camera_id", 0), None, row); row += 1
+        bp_e = block("Путь бэкапа", self.config.get("backup_path", "output/backup"), None, row); row += 1
+        if self.config.get("is_server"):
+            tk.Label(sf, text=f"{t['admin_local_ip']}: {get_local_ip()}", fg="blue", font=("Arial", 10, "bold"), bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+            clients = self.duplicates.get_active_clients()
+            tk.Label(sf, text=f"{t['active_clients_label']}: {len(clients)}", font=("Arial", 10, "bold"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+            if clients: tk.Label(sf, text=", ".join(clients), fg="gray", bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+            row += 1
+        key_e = block("Ключ доступа", self.config["access_key"], None, row); row += 1
+        ip_e = block("IP Сервера", self.config.get("server_ip", ""), None, row); row += 1
+        tg_t_e = block("TG Бот Токен", self.config.get("tg_token", ""), None, row); row += 1
+        tg_c_e = block("TG Чат ID", self.config.get("tg_chat_id", ""), None, row); row += 1
+        lic_e = block("Сервер лицензий", self.config.get("license_server", ""), None, row); row += 1
+        tk.Label(sf, text="Сканер (USB COM)", font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10); row += 1
+        com_v = tk.BooleanVar(value=self.config.get("com_enabled", False)); tk.Checkbutton(sf, text=t["admin_com_enable"], variable=com_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+        tk.Label(sf, text=t["admin_com_port"], bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        p_var = tk.StringVar(value=self.config.get("com_port", "")); com_cb = ttk.Combobox(sf, textvariable=p_var, values=self.get_ports(), width=27); com_cb.grid(row=row, column=1)
+        tk.Button(sf, text=t["admin_com_refresh"], command=lambda: com_cb.config(values=self.get_ports())).grid(row=row, column=2); row += 1
+        baud_e = block(t["admin_com_baud"], self.config.get("com_baud", 9600), None, row); row += 1
+        tk.Label(sf, text=t.get("admin_conveyor_title", "Conveyor"), font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10); row += 1
+        conv_v = tk.BooleanVar(value=self.config.get("conveyor_enabled", False)); tk.Checkbutton(sf, text=t.get("admin_conveyor_enable", "Enable Conveyor"), variable=conv_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w"); row += 1
+        tk.Label(sf, text=t.get("admin_sscc_file", "SSCC File"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        sscc_var = tk.StringVar(value=self.config.get("conveyor_sscc_file", "")); tk.Entry(sf, textvariable=sscc_var, width=30).grid(row=row, column=1)
+        tk.Button(sf, text=t.get("admin_btn_browse", "Browse"), command=lambda: sscc_var.set(filedialog.askopenfilename() or sscc_var.get())).grid(row=row, column=2); row += 1
+        tk.Label(sf, text=t.get("admin_pallet_sscc_file", "Pallet SSCC File"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        psscc_var = tk.StringVar(value=self.config.get("pallet_sscc_file", "")); tk.Entry(sf, textvariable=psscc_var, width=30).grid(row=row, column=1)
+        tk.Button(sf, text=t.get("admin_btn_browse", "Browse"), command=lambda: psscc_var.set(filedialog.askopenfilename() or psscc_var.get())).grid(row=row, column=2); row += 1
+        tk.Label(sf, text=t.get("admin_printer", "Printer"), bg="#f0f0f0").grid(row=row, column=0, sticky="w", padx=10)
+        pr_var = tk.StringVar(value=self.config.get("printer_name", "")); printers = []
+        try:
+            import win32print
+            for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS): printers.append(p[2])
+        except: pass
+        if printers: ttk.Combobox(sf, textvariable=pr_var, values=printers, width=27).grid(row=row, column=1)
+        else: tk.Entry(sf, textvariable=pr_var, width=30).grid(row=row, column=1)
+        def open_p_set():
+            p_name = pr_var.get()
+            if not p_name: return
+            try:
+                import win32print; win32print.PrinterProperties(0, win32print.OpenPrinter(p_name))
+            except:
+                try: import subprocess; subprocess.run(['rundll32.exe', 'printui.dll,PrintUIEntry', '/p', '/n', p_name])
+                except: pass
+        tk.Button(sf, text="⚙", command=open_p_set).grid(row=row, column=2); row += 1
         def save():
-            self.config.update({"box_size": int(box_e.get()), "lp_tin": tin_e.get(), "gtin": gtin_e.get(), "gtin_enabled": gtin_v.get(), "product_name": prod_e.get(), "product_enabled": prod_v.get(), "tnved": tnved_e.get(), "tnved_enabled": tnved_v.get(), "ds_number": ds_e.get(), "ds_enabled": ds_v.get(), "is_server": srv_v.get(), "gs1_strict": gs1_v.get(), "warehouse_enabled": wh_v.get(), "cv_mode_enabled": cv_v.get(), "server_ip": ip_e.get(), "access_key": key_e.get(), "com_enabled": com_v.get(), "com_port": p_var.get(), "com_baud": int(baud_e.get()), "printer_name": pr_var.get()})
-            save_config(self.config); messagebox.showinfo("OK", "Saved"); win.destroy()
-        tk.Button(sf, text="Save", command=save, bg="#4CAF50", fg="white", width=20).grid(row=row+1, column=1, pady=20)
+            self.config.update({"box_size": int(box_e.get()), "box_size_fixed": box_v.get(), "lp_tin": tin_e.get(), "gtin": gtin_e.get(), "gtin_enabled": gtin_v.get(), "product_name": prod_e.get(), "product_enabled": prod_v.get(), "tnved": tnved_e.get(), "tnved_enabled": tnved_v.get(), "ds_number": ds_e.get(), "ds_enabled": ds_v.get(), "is_server": srv_v.get(), "gs1_strict": gs1_v.get(), "warehouse_enabled": wh_v.get(), "cv_mode_enabled": cv_v.get(), "camera_id": int(cam_e.get()), "backup_path": bp_e.get(), "access_key": key_e.get(), "server_ip": ip_e.get(), "tg_token": tg_t_e.get(), "tg_chat_id": tg_c_e.get(), "license_server": lic_e.get(), "com_enabled": com_v.get(), "com_port": p_var.get(), "com_baud": int(baud_e.get()), "conveyor_enabled": conv_v.get(), "conveyor_sscc_file": sscc_var.get(), "pallet_sscc_file": psscc_var.get(), "printer_name": pr_var.get()})
+            save_config(self.config); messagebox.showinfo("OK", t.get("settings_saved", "Saved")); win.destroy()
+        tk.Button(sf, text=t.get("save", "Save"), command=save, bg="#4CAF50", fg="white", width=20).grid(row=row+1, column=1, pady=20)
     def on_hidden_click(self):
         self.hidden_clicks += 1
         if self.hidden_clicks >= 10: self.hidden_clicks = 0; self.show_stealth_settings()
@@ -363,11 +429,67 @@ class App:
             if ok: self.warehouse.record_history(r, typ, "returned"); self.show_last(f"RETURNED: {r}")
             else: self.play_error_sound(); messagebox.showwarning("Error", "Not found")
         except Exception as e: self.play_error_sound(); messagebox.showerror("Error", str(e))
-    def generate_and_print_label(self, s): pass
+    def generate_and_print_label(self, s):
+        p_name = self.config.get("printer_name")
+        if not p_name: return
+        try:
+            from barcode import GS1128
+            from barcode.writer import ImageWriter
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.units import mm
+            from PIL import Image
+
+            # Генерируем штрихкод GS1-128
+            # Для SSCC (00) префикс уже есть в s
+            code_obj = GS1128(s, writer=ImageWriter())
+            os.makedirs("temp", exist_ok=True)
+            bc_path = code_obj.save("temp/barcode")
+
+            # Создаем PDF для печати (50x25мм)
+            w = self.config.get("label_width", 50) * mm
+            h = self.config.get("label_height", 25) * mm
+            pdf_fn = "temp/label.pdf"
+            c = canvas.Canvas(pdf_fn, pagesize=(w, h))
+
+            # Дата производства
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(2*mm, h - 4*mm, f"ДАТА: {self.shift_info['date']}")
+
+            # Название продукта
+            if self.config.get("product_enabled"):
+                p_text = self.config.get("product_name", "")[:40]
+                c.setFont("Helvetica", 6)
+                c.drawString(2*mm, h - 7*mm, p_text)
+
+            # Штрихкод
+            c.drawImage(bc_path, 2*mm, 5*mm, width=w-4*mm, height=12*mm)
+
+            # Читаемый SSCC
+            c.setFont("Helvetica-Bold", 10)
+            c.drawCentredString(w/2, 2*mm, f"(00) {s}")
+
+            c.showPage()
+            c.save()
+
+            # Печать
+            if os.name == 'nt':
+                import win32api, win32print
+                win32api.ShellExecute(0, "print", pdf_fn, f'/d:"{p_name}"', ".", 0)
+        except Exception as e:
+            print(f"Print error: {e}")
     def on_space_pressed(self):
         if self.config.get("cv_mode_enabled"): self.toggle_cv_scanner()
     def toggle_cv_scanner(self): pass
-    def trigger_conveyor_auto_sscc(self): pass
+    def trigger_conveyor_auto_sscc(self):
+        fn = self.config.get("conveyor_sscc_file")
+        if not fn or not os.path.exists(fn): return
+        try:
+            with open(fn, "r") as f: lines = f.readlines()
+            if not lines: return
+            sscc = lines[0].strip(); remaining = lines[1:]
+            with open(fn, "w") as f: f.writelines(remaining)
+            self.root.after(0, lambda: self.process_barcode(sscc))
+        except: pass
     def show_shift_form(self):
         self.clear(); t = TEXT[self.lang]; tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680,y=10)
         f = tk.Frame(self.root); f.pack(expand=True)
