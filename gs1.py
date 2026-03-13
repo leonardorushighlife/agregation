@@ -76,11 +76,16 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         idx_01 = data.find("01")
         if idx_01 != -1:
             data = data[idx_01:]
-        else:
+        elif strict:
             raise GS1Error("err_gs1_gtin")
+        else:
+            return {"gtin": "UNKNOWN", "serial": "UNKNOWN", "clean": raw, "raw": raw}
 
     if len(data) < 16:
-        raise GS1Error("err_gs1_structure")
+        if strict:
+            raise GS1Error("err_gs1_structure")
+        else:
+            return {"gtin": "UNKNOWN", "serial": "UNKNOWN", "clean": raw, "raw": raw}
 
     gtin = data[2:16]
     rest = data[16:]
@@ -91,13 +96,15 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         rest = "21" + rest[4:]
 
     if not rest.startswith("21"):
-        if strict:
-            raise GS1Error("err_gs1_21")
         idx_21 = rest.find("21")
         if idx_21 != -1:
             rest = rest[idx_21:]
-        else:
+        elif strict:
             raise GS1Error("err_gs1_21")
+        else:
+            # В нестрогом режиме, если 21 не найден, считаем всё оставшееся серийником
+            # или возвращаем как есть.
+            return {"gtin": gtin, "serial": rest, "clean": raw, "raw": raw}
 
     rest = rest[2:]
 
@@ -141,9 +148,12 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
             serial = rest
 
     if not serial:
-        raise GS1Error("err_gs1_21")
+        if strict:
+            raise GS1Error("err_gs1_21")
+        else:
+            serial = "UNKNOWN"
 
-    clean = f"01{gtin}21{serial}"
+    clean = f"01{gtin}21{serial}" if gtin != "UNKNOWN" and serial != "UNKNOWN" else raw
 
     return {
         "gtin": gtin,

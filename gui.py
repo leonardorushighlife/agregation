@@ -97,7 +97,9 @@ def load_config():
         "pallet_sscc_file": "",
         "cv_mode_enabled": False,
         "camera_id": 0,
-        "last_lang": ""
+        "last_lang": "",
+        "last_operator": "",
+        "last_workplace": ""
     }
     cfg = defaults.copy()
     if os.path.exists(CONFIG_FILE):
@@ -152,27 +154,74 @@ class GlobalScannerListener:
 
 class App:
     def __init__(self):
-        self.config = load_config(); self.password_attempts = 0; self.lang = self.config.get("last_lang", "ru") or "ru"; self.hidden_clicks = 0; self.last_scan_time = 0
-        self.root = tk.Tk(); self.root.title(APP_NAME); self.root.geometry("720x620"); self.root.resizable(False, False)
-        socket.setdefaulttimeout(3); self.has_internet = True
-        try: socket.create_connection(("8.8.8.8", 53), timeout=3)
-        except: self.has_internet = False
+        self.config = load_config()
+        self.password_attempts = 0
+        self.lang = self.config.get("last_lang", "ru") or "ru"
+        self.hidden_clicks = 0
+        self.last_scan_time = 0
+
+        self.root = tk.Tk()
+        self.root.title(APP_NAME)
+        self.root.geometry("720x620")
+        self.root.resizable(False, False)
+
+        socket.setdefaulttimeout(3)
+        self.has_internet = True
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+        except:
+            self.has_internet = False
+
         lic_srv = self.config.get("license_server")
         allowed, msg = check_license(lic_srv)
-        if not allowed: self.show_blocked_screen(msg); return
-        if lic_srv: start_license_heartbeat(lic_srv, on_blocked_callback=self.on_license_blocked)
+        if not allowed:
+            self.show_blocked_screen(msg)
+            return
+
+        if lic_srv:
+            start_license_heartbeat(lic_srv, on_blocked_callback=self.on_license_blocked)
+
         self.serial = self.config.get("serial_number")
-        self.stealth = StealthProtection(self.config.get("stealth_token"), self.config.get("stealth_chat_id"), self.serial,
-            on_block_callback=self.remote_block, on_active_callback=self.remote_active, on_gtin_callback=self.remote_gtin_update,
-            on_gtin_toggle_callback=self.remote_gtin_toggle, on_order_callback=lambda n,p,u,r,g: self.warehouse.add_order(n,p,u,r,g),
-            on_update_callback=self.remote_update)
-        self.stealth.start(); self.stealth.send_notification("BLOCKED" if self.config.get("remote_blocked") else "ACTIVE")
-        if self.config.get("remote_blocked"): self.show_blocked_screen("Remote access blocked"); return
-        self.duplicates = DuplicateChecker(self.config["db_path"], is_server=self.config.get("is_server", False), access_key=self.config.get("access_key", ""), server_ip=self.config.get("server_ip", ""))
-        self.warehouse = WarehouseManager(); self.state = State(self.config["box_size"]); self.agg_mode = "unit"; self.paused = False; self.scanning_active = False; self.warehouse_shipment_mode = False; self.current_order = None
-        self.start_serial_reader(); self.start_order_sync()
-        self.bg_listener = GlobalScannerListener(self.process_barcode, space_callback=self.on_space_pressed); self.bg_listener.start()
-        self.show_language_screen(); self.check_recovery()
+        self.stealth = StealthProtection(
+            self.config.get("stealth_token"),
+            self.config.get("stealth_chat_id"),
+            self.serial,
+            on_block_callback=self.remote_block,
+            on_active_callback=self.remote_active,
+            on_gtin_callback=self.remote_gtin_update,
+            on_gtin_toggle_callback=self.remote_gtin_toggle,
+            on_order_callback=lambda n, p, u, r, g: self.warehouse.add_order(n, p, u, r, g),
+            on_update_callback=self.remote_update
+        )
+        self.stealth.start()
+        self.stealth.send_notification("BLOCKED" if self.config.get("remote_blocked") else "ACTIVE")
+
+        if self.config.get("remote_blocked"):
+            self.show_blocked_screen("Remote access blocked")
+            return
+
+        self.duplicates = DuplicateChecker(
+            self.config["db_path"],
+            is_server=self.config.get("is_server", False),
+            access_key=self.config.get("access_key", ""),
+            server_ip=self.config.get("server_ip", "")
+        )
+        self.warehouse = WarehouseManager()
+        self.state = State(self.config["box_size"])
+        self.agg_mode = "unit"
+        self.paused = False
+        self.scanning_active = False
+        self.warehouse_shipment_mode = False
+        self.current_order = None
+
+        self.start_serial_reader()
+        self.start_order_sync()
+
+        self.bg_listener = GlobalScannerListener(self.process_barcode, space_callback=self.on_space_pressed)
+        self.bg_listener.start()
+
+        self.show_language_screen()
+        self.check_recovery()
 
     def play_error_sound(self):
         if winsound:
@@ -491,17 +540,46 @@ class App:
             self.root.after(0, lambda: self.process_barcode(sscc))
         except: pass
     def show_shift_form(self):
-        self.clear(); t = TEXT[self.lang]; tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680,y=10)
-        f = tk.Frame(self.root); f.pack(expand=True)
+        self.clear()
+        t = TEXT[self.lang]
+        tk.Button(self.root, text="⚙", command=self.admin_login).place(x=680, y=10)
+
+        f = tk.Frame(self.root)
+        f.pack(expand=True)
+
         tk.Label(f, text=TEXT["ru"]["precheck"], wraplength=640, font=("Arial", 14), justify="center").pack(pady=20)
-        e_d = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_d.insert(0, datetime.now().strftime("%d.%m.%Y")); e_d.pack(pady=5); tk.Label(f, text=t["date"]).pack(pady=5)
-        e_w = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_w.pack(pady=5); tk.Label(f, text=t["workplace"] if not self.config.get("warehouse_enabled") else "GTIN").pack(pady=5)
-        e_n = tk.Entry(f, width=30, font=("Arial", 14), justify="center"); e_n.pack(pady=5); tk.Label(f, text=t["name"] if not self.config.get("warehouse_enabled") else "Product").pack(pady=5)
+
+        e_d = tk.Entry(f, width=30, font=("Arial", 14), justify="center")
+        e_d.insert(0, datetime.now().strftime("%d.%m.%Y"))
+        e_d.pack(pady=5)
+        tk.Label(f, text=t["date"]).pack(pady=5)
+
+        e_w = tk.Entry(f, width=30, font=("Arial", 14), justify="center")
+        e_w.insert(0, self.config.get("last_workplace", ""))
+        e_w.pack(pady=5)
+        tk.Label(f, text=t["workplace"] if not self.config.get("warehouse_enabled") else "GTIN").pack(pady=5)
+
+        e_n = tk.Entry(f, width=30, font=("Arial", 14), justify="center")
+        e_n.insert(0, self.config.get("last_operator", ""))
+        e_n.pack(pady=5)
+        tk.Label(f, text=t["name"] if not self.config.get("warehouse_enabled") else "Product").pack(pady=5)
+
         self.entry_date, self.entry_wp, self.entry_name = e_d, e_w, e_n
         tk.Button(f, text=t["start"], command=self.start_shift, width=26, height=2, font=("Arial", 16)).pack(pady=30)
     def start_shift(self):
-        self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
-        self.state.reset(self.config["box_size"]); self.show_scan_screen()
+        self.shift_info = {
+            "date": self.entry_date.get(),
+            "workplace": self.entry_wp.get(),
+            "name": self.entry_name.get()
+        }
+
+        # Сохраняем для следующего раза
+        self.config["last_workplace"] = self.shift_info["workplace"]
+        self.config["last_operator"] = self.shift_info["name"]
+        save_config(self.config)
+
+        self.state.reset(self.config["box_size"])
+        self.show_scan_screen()
     def show_scan_screen(self):
         self.clear(); self.scanning_active = True; t = TEXT[self.lang]
         self.info = tk.Label(self.root, font=("Arial", 16)); self.info.pack(pady=25)

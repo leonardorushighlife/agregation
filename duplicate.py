@@ -37,8 +37,9 @@ class DuplicateChecker:
             self._local.conn = sqlite3.connect(self.db_path, timeout=10)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn.execute("PRAGMA busy_timeout = 5000")
+            self._local.conn.execute("PRAGMA busy_timeout = 30000")
             self._local.conn.execute("PRAGMA cache_size=-64000")
+            self._local.conn.execute("PRAGMA temp_store=MEMORY")
         return self._local.conn
 
     def _init_db(self):
