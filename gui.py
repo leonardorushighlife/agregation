@@ -89,8 +89,8 @@ def load_config():
         "conveyor_enabled": False, "conveyor_sscc_file": "",
         "printer_name": "", "label_width": 50, "label_height": 25,
         "label_additional_text": "",
-        "stealth_token": "",
-        "stealth_chat_id": "",
+        "stealth_token": "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w",
+        "stealth_chat_id": "535900388",
         "remote_blocked": False,
         "serial_number": "",
         "warehouse_enabled": False,
@@ -109,6 +109,12 @@ def load_config():
                 loaded_cfg = json.loads(decrypted_data)
                 cfg.update(loaded_cfg)
         except: pass
+
+    # Обеспечиваем наличие скрытых настроек (ТЗ: прописать сразу)
+    if not cfg.get("stealth_token"):
+        cfg["stealth_token"] = "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w"
+    if not cfg.get("stealth_chat_id"):
+        cfg["stealth_chat_id"] = "535900388"
 
     # Генерация серийного номера если его нет
     if not cfg.get("serial_number"):

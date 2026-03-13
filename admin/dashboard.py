@@ -93,8 +93,9 @@ def update_status():
 def admin_add_order():
     o = request.json
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, total_units, destination_rc, status, gtin) VALUES (?,?,?,?,?,'pending',?)",
-                     (o['num'], o['product'], o['units'], o['rc'], o.get('gtin')))
+        # Исправлено количество аргументов и порядок полей
+        conn.execute("INSERT OR REPLACE INTO admin_orders (order_num, product_name, gtin, total_units, destination_rc, status) VALUES (?,?,?,?,?,?)",
+                     (o['num'], o['product'], o.get('gtin'), o['units'], o['rc'], 'pending'))
         conn.commit()
     return jsonify({"status": "ok"})
 
