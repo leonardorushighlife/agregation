@@ -1,5 +1,4 @@
 from datetime import datetime
-
 import threading
 
 class State:
@@ -54,9 +53,9 @@ class State:
     def get_shift_summary(self):
         with self.lock:
             return {
-            "start_time": self.shift_start_time,
-            "total_boxes": len(self.boxes_data),
-            "total_codes": self.total_codes_in_shift,
-            "data": self.boxes_data,
-            "duplicates": self.duplicates_list
-        }
+                "start_time": self.shift_start_time,
+                "total_boxes": len(self.boxes_data),
+                "total_codes": self.total_codes_in_shift,
+                "data": self.boxes_data,
+                "duplicates": self.duplicates_list
+            }
