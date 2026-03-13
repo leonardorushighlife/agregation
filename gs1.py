@@ -121,7 +121,7 @@ def parse_gs1(raw: str, strict: bool = True) -> dict:
         raise GS1Error("err_gs1_structure")
 
     gs_idx = -1
-    for sep in [GS, FNC1_CHAR, " "]:
+    for sep in [GS, FNC1_CHAR, " ", ",", ";", "|"]:
         idx = rest.find(sep)
         if idx != -1:
             gs_idx = idx

@@ -6,6 +6,7 @@ import shutil
 import socket
 import sqlite3
 import threading
+import queue
 from datetime import datetime
 import requests
 import time
@@ -39,9 +40,18 @@ from licensing import check_license, start_license_heartbeat, get_hwid
 from stealth import StealthProtection
 
 import barcode
+from barcode import GS1128
 from barcode.writer import ImageWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+from PIL import Image
+
+try:
+    import win32api
+    import win32print
+except ImportError:
+    win32api = None
+    win32print = None
 
 def _d(h): return bytes.fromhex(h).decode()
 def _db(h): return bytes.fromhex(h)
@@ -156,6 +166,9 @@ class GlobalScannerListener:
 class App:
     def __init__(self):
         self.config = load_config()
+        self.scan_queue = queue.Queue()
+        self.processing_lock = threading.Lock()
+        self.modal_open = False
         self.password_attempts = 0
         self.lang = self.config.get("last_lang", "ru") or "ru"
         self.hidden_clicks = 0
@@ -218,11 +231,28 @@ class App:
         self.start_serial_reader()
         self.start_order_sync()
 
-        self.bg_listener = GlobalScannerListener(self.process_barcode, space_callback=self.on_space_pressed)
+        self.bg_listener = GlobalScannerListener(self.enqueue_barcode, space_callback=self.on_space_pressed)
         self.bg_listener.start()
+
+        threading.Thread(target=self.scan_worker, daemon=True).start()
 
         self.show_language_screen()
         self.check_recovery()
+
+    def enqueue_barcode(self, r_in):
+        if self.scanning_active and not self.paused and not self.modal_open:
+            self.scan_queue.put(r_in)
+
+    def scan_worker(self):
+        while True:
+            r_in = self.scan_queue.get()
+            try:
+                with self.processing_lock:
+                    self.process_barcode(r_in)
+            except Exception as e:
+                print(f"Worker error: {e}")
+            finally:
+                self.scan_queue.task_done()
 
     def play_error_sound(self):
         if winsound:
@@ -419,8 +449,6 @@ class App:
             except: pass
             time.sleep(60)
     def process_barcode(self, r_in):
-        if not self.scanning_active or self.paused:
-            return
         if not r_in:
             return
 
@@ -462,15 +490,19 @@ class App:
             try:
                 self.duplicates.check_sscc(r); u = self.state.scan_sscc(r); self.duplicates.update_sscc_for_units([x['raw'] for x in u], r); self.duplicates.save_box_to_recovery(r, u, self.shift_info)
                 if self.config.get("warehouse_enabled"): self.warehouse.acceptance_box(r, self.shift_info.get("gtin")); self.warehouse.register_units_in_box(r, [x["clean"] for x in u]); self.warehouse.record_history(r, "box", "received")
-                self.show_last(f"{t['closed_box']}{r}"); self.update_info(); self.generate_and_print_label(r)
+                self.show_last(f"{t['closed_box']}{r}")
+                self.root.after(0, self.update_info)
+                threading.Thread(target=self.generate_and_print_label, args=(r,), daemon=True).start()
             except Exception as e:
-                self.play_error_sound(); messagebox.showerror(t["error"], str(e))
+                self.play_error_sound()
+                self.show_error_message(t["error"], str(e))
         else:
             try:
                 p = parse_gs1(r, strict=self.config.get("gs1_strict", True))
                 if self.config["gtin_enabled"] and p["gtin"] != self.config["gtin"]: raise Exception(t["err_gtin"])
                 self.show_last(p["raw"]); self.duplicates.check(r, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
-                res = self.state.scan_unit(p); self.update_info()
+                res = self.state.scan_unit(p)
+                self.root.after(0, self.update_info)
                 if self.config.get("warehouse_enabled"): self.warehouse.record_history(p["clean"], "unit", "received")
                 if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"): self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
@@ -478,40 +510,68 @@ class App:
                 if msg.startswith("DUPLICATE|"):
                     ps = msg.split("|"); m = t["dup_details"].format(r, ps[1], ps[2]);
                     if ps[3]: m += t["dup_box"].format(ps[3][-4:])
-                    win = tk.Toplevel(self.root); win.title(t["dup_title"]); win.geometry("500x320"); win.attributes("-topmost", True); win.grab_set()
-                    tk.Label(win, text=m, font=("Arial", 14, "bold"), fg="red", justify="left", wraplength=450).pack(pady=30, padx=20)
-                    btn = tk.Button(win, text="OK (ENTER)", command=win.destroy, width=20, height=2, bg="red", fg="white", font=("Arial", 12, "bold"))
-                    btn.pack(pady=20); btn.focus_set(); win.bind("<Return>", lambda e: win.destroy()); win.bind("<Escape>", lambda e: win.destroy())
-                else: messagebox.showerror(t["error"], t.get(msg, msg))
+                    self.show_duplicate_window(m)
+                else:
+                    self.show_error_message(t["error"], t.get(msg, msg))
+
+    def show_error_message(self, title, msg):
+        self.modal_open = True
+        self.root.after(0, lambda: [messagebox.showerror(title, msg), self.set_modal_closed()])
+
+    def set_modal_closed(self):
+        self.modal_open = False
+
+    def show_duplicate_window(self, m):
+        self.modal_open = True
+        t = TEXT[self.lang]
+        def _show():
+            win = tk.Toplevel(self.root); win.title(t["dup_title"]); win.geometry("600x450"); win.attributes("-topmost", True); win.grab_set()
+            tk.Label(win, text=m, font=("Arial", 14, "bold"), fg="red", justify="left", wraplength=550).pack(pady=30, padx=20)
+            def _close(): win.destroy(); self.set_modal_closed()
+            btn = tk.Button(win, text="OK (ENTER)", command=_close, width=20, height=2, bg="red", fg="white", font=("Arial", 14, "bold"))
+            btn.pack(pady=20); btn.focus_set(); win.bind("<Return>", lambda e: _close()); win.bind("<Escape>", lambda e: _close())
+        self.root.after(0, _show)
     def on_scan_shipment(self, r):
-        if not r.startswith("00"): self.play_error_sound(); messagebox.showerror("Error", "Need SSCC"); return
-        if not self.current_order: self.play_error_sound(); messagebox.showerror("Error", "Select Order"); return
+        if not r.startswith("00"):
+            self.play_error_sound()
+            self.show_error_message("Error", "Need SSCC")
+            return
+        if not self.current_order:
+            self.play_error_sound()
+            self.show_error_message("Error", "Select Order")
+            return
         try:
             inf = self.warehouse.get_sscc_info(r)
             if not inf: raise Exception("Not found in DB")
             ok, typ = self.warehouse.shipment(r)
             if ok:
                 self.warehouse.record_history(r, inf["type"], "shipped", self.current_order)
-                cnt = self.warehouse.get_sscc_content(r); self.state.boxes_data.append((r, [{"clean":x,"raw":x,"gtin":inf.get("gtin","")} for x in cnt]))
-                self.state.total_codes_in_shift += len(cnt); self.show_last(f"SHIPPED: {r}"); self.update_info()
-        except Exception as e: self.play_error_sound(); messagebox.showerror("Error", str(e))
+                cnt = self.warehouse.get_sscc_content(r)
+                self.state.boxes_data.append((r, [{"clean":x,"raw":x,"gtin":inf.get("gtin","")} for x in cnt]))
+                self.state.total_codes_in_shift += len(cnt)
+                self.show_last(f"SHIPPED: {r}")
+                self.root.after(0, self.update_info)
+        except Exception as e:
+            self.play_error_sound()
+            self.show_error_message("Error", str(e))
+
     def on_scan_return(self, r):
         if not r.startswith("00"): return
         try:
             ok, typ = self.warehouse.return_item(r)
-            if ok: self.warehouse.record_history(r, typ, "returned"); self.show_last(f"RETURNED: {r}")
-            else: self.play_error_sound(); messagebox.showwarning("Error", "Not found")
-        except Exception as e: self.play_error_sound(); messagebox.showerror("Error", str(e))
+            if ok:
+                self.warehouse.record_history(r, typ, "returned")
+                self.show_last(f"RETURNED: {r}")
+            else:
+                self.play_error_sound()
+                self.show_error_message("Error", "Not found")
+        except Exception as e:
+            self.play_error_sound()
+            self.show_error_message("Error", str(e))
     def generate_and_print_label(self, s):
         p_name = self.config.get("printer_name")
         if not p_name: return
         try:
-            from barcode import GS1128
-            from barcode.writer import ImageWriter
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.units import mm
-            from PIL import Image
-
             # Генерируем штрихкод GS1-128
             # Для SSCC (00) префикс уже есть в s
             code_obj = GS1128(s, writer=ImageWriter())
@@ -545,8 +605,7 @@ class App:
             c.save()
 
             # Печать
-            if os.name == 'nt':
-                import win32api, win32print
+            if os.name == 'nt' and win32api:
                 win32api.ShellExecute(0, "print", pdf_fn, f'/d:"{p_name}"', ".", 0)
         except Exception as e:
             print(f"Print error: {e}")
