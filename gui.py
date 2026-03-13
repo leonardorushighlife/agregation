@@ -6,6 +6,7 @@ import shutil
 import socket
 import sqlite3
 import threading
+import queue
 from datetime import datetime
 import requests
 import time
@@ -142,7 +143,7 @@ class GlobalScannerListener:
 
     def on_press(self, key):
         try:
-            current_time = time.time()
+            current_time = time.perf_counter()
             # Если пауза между символами более 500мс, считаем что это новый ввод
             if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.5):
                 self.buffer = ""
@@ -159,7 +160,8 @@ class GlobalScannerListener:
                     # Проверка скорости ввода
                     if self.key_times:
                         avg_time = sum(self.key_times) / len(self.key_times)
-                        if avg_time < 0.15: # Повышаем порог до 150мс для надежности
+                        # Оптимизация: сканеры < 80мс, человек > 100мс
+                        if avg_time < 0.08:
                             self.callback(self.buffer)
 
                     self.buffer = ""
@@ -168,6 +170,10 @@ class GlobalScannerListener:
             elif hasattr(key, 'char') and key.char:
                 char = key.char
                 self.buffer += char
+                if len(self.buffer) > 500: # Защита от мусора
+                    self.buffer = self.buffer[-500:]
+                    if self.key_times: self.key_times = self.key_times[-499:]
+
                 if self.last_key_time > 0:
                     self.key_times.append(current_time - self.last_key_time)
                 self.last_key_time = current_time
@@ -198,6 +204,9 @@ class App:
         self.password_attempts = 0
         self.lang = "ru" # Дефолтный язык для системных сообщений до выбора
         self.hidden_clicks = 0
+        self.modal_open = False
+        self.scan_queue = queue.Queue()
+        threading.Thread(target=self._scan_worker, daemon=True).start()
 
         if self.config.get("limit_enabled") and days_passed(self.config["first_run"]) >= 180:
             self.config["box_size"] = 1
@@ -377,7 +386,7 @@ class App:
                         if not member.startswith("data/") and member != CONFIG_FILE:
                             z.extract(member, ".")
                 os.remove("update.zip")
-                messagebox.showinfo("Update", "Программа обновлена. Перезапустите её.")
+                self._msg_box(messagebox.showinfo, "Update", "Программа обновлена. Перезапустите её.")
             except Exception as e:
                 print(f"Update error: {e}")
         threading.Thread(target=_upd, daemon=True).start()
@@ -479,7 +488,8 @@ class App:
         tk.Button(win, text="Save", command=save).pack(pady=20)
 
     def admin_panel(self):
-        t = TEXT[self.lang]
+        # ТЗ: Админ-панель всегда на Русском
+        t = TEXT["ru"]
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
         win.geometry("650x600")
@@ -1259,6 +1269,15 @@ class App:
             pass
 
     def handle_duplicate_error(self, err_msg, code):
+        if threading.current_thread() is not threading.main_thread():
+            done = threading.Event()
+            self.root.after(0, lambda: [self._real_handle_duplicate_error(err_msg, code), done.set()])
+            done.wait()
+            return
+        self._real_handle_duplicate_error(err_msg, code)
+
+    def _real_handle_duplicate_error(self, err_msg, code):
+        self.play_error_sound()
         t = TEXT[self.lang]
         parts = err_msg.split("|")
         if len(parts) >= 4:
@@ -1340,11 +1359,35 @@ class App:
             self.show_last(f"{t['mode_box_acc']}: {raw}")
             self.update_info()
         except Exception as e:
-            self.root.after(0, lambda: self._msg_box(messagebox.showerror, t["error"], str(e)))
+            self._msg_box(messagebox.showerror, t["error"], str(e))
+
+    def _scan_worker(self):
+        last_code = ""
+        last_time = 0
+        while True:
+            try:
+                raw_input = self.scan_queue.get()
+                if not raw_input: continue
+
+                now = time.perf_counter()
+                # Анти-дребезг (если пришло дважды за 50мс)
+                if raw_input == last_code and (now - last_time < 0.05):
+                    continue
+
+                last_code = raw_input
+                last_time = now
+
+                self._handle_barcode_logic(raw_input)
+            except Exception as e:
+                print(f"Worker thread error: {e}")
 
     def process_barcode(self, raw_input):
-        if not self.scanning_active or self.paused: return
+        if not self.scanning_active or self.paused or self.modal_open: return
         if not raw_input: return
+        self.scan_queue.put(raw_input)
+
+    def _handle_barcode_logic(self, raw_input):
+        if self.modal_open: return
         # Заменяем раскладку
         processed = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
 
@@ -1434,7 +1477,7 @@ class App:
         t = TEXT[self.lang]
         if self.state.wait_sscc:
             if not raw.startswith("00"):
-                self.root.after(0, lambda: self._msg_box(messagebox.showerror, t["error"], t["err_expect_box_prefix"])); return
+                self._msg_box(messagebox.showerror, t["error"], t["err_expect_box_prefix"]); return
             try:
                 self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
                 self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
@@ -1448,10 +1491,10 @@ class App:
                     self.warehouse.record_history(raw, "box", "received")
 
                 self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
-            except Exception as e: self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+            except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
         else:
             if raw.startswith("00") and len(raw) >= 18:
-                self.root.after(0, lambda: messagebox.showwarning(t["error"], t["warn_box_incomplete"])); return
+                self._msg_box(messagebox.showwarning, t["error"], t["warn_box_incomplete"]); return
             try:
                 parsed = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
                 if self.config["gtin_enabled"] and parsed["gtin"] != self.config["gtin"]:
@@ -1471,12 +1514,12 @@ class App:
             except GS1Error as e:
                 err_key = str(e)
                 msg = t.get(err_key, err_key)
-                self.root.after(0, lambda msg=msg: self._msg_box(messagebox.showerror, t["error"], msg))
+                self._msg_box(messagebox.showerror, t["error"], msg)
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"):
-                    self.root.after(0, lambda e=e: self.handle_duplicate_error(str(e), raw))
+                    self.handle_duplicate_error(str(e), raw)
                 else:
-                    self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+                    self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def on_space_pressed(self):
         if self.config.get("cv_mode_enabled") and self.scanning_active and not self.paused:
@@ -1550,17 +1593,17 @@ class App:
                     threading.Thread(target=requests.post, args=(f"https://api.telegram.org/bot{token}/sendMessage",),
                                      kwargs={"data": {"chat_id": chat_id, "text": f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})"}}).start()
             else:
-                self.root.after(0, lambda: self._msg_box(messagebox.showwarning, t["error"], t.get("err_not_found", "Item not found in database")))
+                self._msg_box(messagebox.showwarning, t["error"], t.get('err_not_found', "Item not found in database"))
         except Exception as e:
-            self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+            self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def on_scan_shipment(self, raw):
         t = TEXT[self.lang]
         if not raw.startswith("00"):
-            self.root.after(0, lambda: self._msg_box(messagebox.showerror, t["error"], t.get("err_expect_sscc", "Expected SSCC"))); return
+            self._msg_box(messagebox.showerror, t["error"], t.get('err_expect_sscc', "Expected SSCC")); return
 
         if not self.current_order:
-            self.root.after(0, lambda: self._msg_box(messagebox.showerror, t["error"], t.get("err_no_order", "Select order first!"))); return
+            self._msg_box(messagebox.showerror, t["error"], t.get('err_no_order', "Select order first!")); return
 
         try:
             # Проверяем SSCC в базе склада
@@ -1596,7 +1639,7 @@ class App:
 
                 self.update_info()
         except Exception as e:
-            self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+            self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def on_scan_pallet(self, raw):
         t = TEXT[self.lang]
@@ -1618,7 +1661,7 @@ class App:
                     self.warehouse.record_history(raw, "pallet", "received")
 
                 self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
-            except Exception as e: self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+            except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
         else:
             # Ожидаем код коробки (начинается на 00)
             if not raw.startswith("00"):
@@ -1648,9 +1691,9 @@ class App:
                         self.root.after(500, self.trigger_conveyor_auto_sscc)
             except Exception as e:
                 if str(e).startswith("DUPLICATE|"):
-                    self.root.after(0, lambda e=e: self.handle_duplicate_error(str(e), raw))
+                    self.handle_duplicate_error(str(e), raw)
                 else:
-                    self.root.after(0, lambda e=e: self._msg_box(messagebox.showerror, t["error"], str(e)))
+                    self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def perform_save(self):
         t = TEXT[self.lang]
@@ -1787,7 +1830,36 @@ class App:
             self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
         self.root.after(0, _upd)
 
+    def play_error_sound(self):
+        def _play():
+            try:
+                import winsound
+                winsound.Beep(1000, 500)
+                winsound.Beep(1000, 500)
+            except:
+                # Fallback для Linux или если winsound недоступен
+                self.root.bell()
+        threading.Thread(target=_play, daemon=True).start()
+
     def _msg_box(self, func, *args, **kwargs):
+        # Если это ошибка или предупреждение - играем звук
+        if func in [messagebox.showerror, messagebox.showwarning]:
+            self.play_error_sound()
+
+        if threading.current_thread() is not threading.main_thread():
+            self.modal_open = True
+            res_queue = queue.Queue()
+            def _task():
+                try:
+                    r = func(*args, **kwargs)
+                    res_queue.put(r)
+                finally:
+                    self.modal_open = False
+                    if hasattr(self, 'scan_entry') and self.scan_entry.winfo_exists():
+                        self.scan_entry.focus_set()
+            self.root.after(0, _task)
+            return res_queue.get()
+
         self.modal_open = True
         try:
             res = func(*args, **kwargs)
