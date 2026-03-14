@@ -1205,10 +1205,15 @@ class App:
 
     def update_connection_status(self):
         t = TEXT[self.lang]
+        # Защита от обращения к уничтоженному виджету
+        if not hasattr(self, "conn_lbl") or not self.conn_lbl.winfo_exists():
+            return
+
         if not self.config.get("is_server"):
             if self.duplicates.is_connected: self.conn_lbl.config(text=f"● {t['connected']}", fg="green")
             else: self.conn_lbl.config(text=f"○ {t['disconnected']}", fg="red")
-        if hasattr(self, "conn_lbl") and self.conn_lbl.winfo_exists():
+
+        if self.conn_lbl.winfo_exists():
             self.root.after(5000, self.update_connection_status)
 
     def pause(self):
