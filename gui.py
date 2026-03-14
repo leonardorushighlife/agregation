@@ -1715,7 +1715,8 @@ class App:
                     self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def perform_save(self):
-        t = TEXT[self.lang]
+        # ТЗ: Имена файлов всегда на Русском
+        t_ru = TEXT["ru"]
         summary = self.state.get_shift_summary()
         if not summary["data"]: return []
         ts = datetime.now().strftime("%H%M%S"); dt = self.shift_info['date'].replace('.', '_'); op = self.shift_info['name'].replace(' ', '_')
@@ -1723,7 +1724,7 @@ class App:
         os.makedirs("output", exist_ok=True)
 
         is_pallet = (self.state.mode == "pallet")
-        prefix = f"{t['pallet']}_" if is_pallet else ""
+        prefix = f"{t_ru['pallet']}_" if is_pallet else ""
 
         # Базовое имя для большинства файлов (смена)
         if self.agg_mode == "warehouse_ship" and self.current_order:
@@ -1731,28 +1732,28 @@ class App:
             base_agg = base_shift
             base_all = f"output/отгрузка_{dt}_{self.current_order}_csv"
         else:
-            base_shift = f"output/{prefix}{t['fn_shift']}_{dt}_{op}_{ts}"
-            base_agg = f"output/{prefix}{t.get('fn_agg', 'агрегация')}_{dt}_{op}_{ts}"
-            base_all = f"output/{prefix}{t.get('fn_all', 'ВСЕ')}_{dt}_{op}_{ts}"
+            base_shift = f"output/{prefix}{t_ru['fn_shift']}_{dt}_{op}_{ts}"
+            base_agg = f"output/{prefix}{t_ru.get('fn_agg', 'агрегация')}_{dt}_{op}_{ts}"
+            base_all = f"output/{prefix}{t_ru.get('fn_all', 'ВСЕ')}_{dt}_{op}_{ts}"
 
-        xls_a = f"{base_shift}_{t['fn_agg']}.xlsx"
-        txt_d = f"{base_shift}_{t['fn_dups']}.txt"
+        xls_a = f"{base_shift}_{t_ru['fn_agg']}.xlsx"
+        txt_d = f"{base_shift}_{t_ru['fn_dups']}.txt"
 
         if is_pallet:
             files = [xls_a]
         else:
-            xls_n = f"{base_shift}_{t['fn_prod']}.xlsx"
+            xls_n = f"{base_shift}_{t_ru['fn_prod']}.xlsx"
             csv_n = f"{base_all}.csv"
             files = [xls_a, xls_n, csv_n]
 
         LIMIT = 30000; current = []; count = 0; part = 1
         for box in summary["data"]:
             if count + len(box[1]) > LIMIT and current:
-                fn = f"{base_agg}_{t['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
+                fn = f"{base_agg}_{t_ru['fn_part']}_{part}.txt"; open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn); current = []; count = 0; part += 1
             current.append(box); count += len(box[1])
 
         if current:
-            fn = f"{base_agg}_{t['fn_part']}_{part}.txt" if part > 1 else f"{base_agg}.txt"
+            fn = f"{base_agg}_{t_ru['fn_part']}_{part}.txt" if part > 1 else f"{base_agg}.txt"
             open(fn, "w", encoding="utf-8").write(self.generate_xml(current)); files.append(fn)
 
         self.gen_xls_agg(summary["data"], xls_a)
@@ -1800,11 +1801,12 @@ class App:
         wb.save(fn)
 
     def gen_xls_prod(self, boxes, fn):
-        t = TEXT[self.lang]
+        # ТЗ: Отчет о нанесении всегда на Русском
+        t_ru = TEXT["ru"]
         wb = openpyxl.Workbook(); ws = wb.active;
-        ws.append([t["xls_prod_name"], t["xls_code"], t["xls_gtin"], t["xls_tnved"], t["xls_decl"], t["xls_ds"], t["xls_date"]])
+        ws.append([t_ru["xls_prod_name"], t_ru["xls_code"], t_ru["xls_gtin"], t_ru["xls_tnved"], t_ru["xls_decl"], t_ru["xls_ds"], t_ru["xls_date"]])
         for s, u in boxes:
-            for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", t["xls_decl"], self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
+            for x in u: ws.append([self.config["product_name"] if self.config["product_enabled"] else "", x["clean"], x["gtin"], self.config["tnved"] if self.config["tnved_enabled"] else "", t_ru["xls_decl"], self.config["ds_number"] if self.config["ds_enabled"] else "", self.shift_info["date"]])
         wb.save(fn)
 
     def gen_csv_prod(self, boxes, fn):
@@ -1814,10 +1816,11 @@ class App:
                     f.write(f"{x['raw']}\n")
 
     def gen_txt_dups(self, dups, fn):
-        t = TEXT[self.lang]
+        # ТЗ: Отчет о дубликатах всегда на Русском
+        t_ru = TEXT["ru"]
         with open(fn, "w", encoding="utf-8") as f:
-            f.write(f"{t['report_dup']}\n" + "="*20 + "\n")
-            for d in dups: f.write(f"{t['report_time']}: {d['time']}\n{t['report_code']}: {d['code']}\n{t['report_prev']}: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
+            f.write(f"{t_ru['report_dup']}\n" + "="*20 + "\n")
+            for d in dups: f.write(f"{t_ru['report_time']}: {d['time']}\n{t_ru['report_code']}: {d['code']}\n{t_ru['report_prev']}: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
 
     def send_to_telegram(self, files):
         tk_l = TEXT[self.lang]
