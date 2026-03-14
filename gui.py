@@ -221,6 +221,7 @@ class App:
         self.root.title(APP_NAME)
         self.root.geometry("720x620")
         self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Проверка интернета и лицензии
         self.check_internet_connection()
@@ -1218,9 +1219,16 @@ class App:
         t = TEXT[self.lang]
         self.perform_save(); self._msg_box(messagebox.showinfo, t["success"], t["saved"])
 
+    def on_closing(self):
+        t = TEXT[self.lang]
+        if self.scanning_active and self.state.in_box != 0:
+            self._msg_box(messagebox.showwarning, t["error"], t["need_close_box"])
+            return
+        self.root.destroy()
+
     def end_shift(self):
         t = TEXT[self.lang]
-        if self.state.mode != "shipment" and self.state.in_box != 0:
+        if self.state.in_box != 0:
             self._msg_box(messagebox.showwarning, t["error"], t["need_close_box"]); return
 
         if self._msg_box(messagebox.askokcancel, t["end_shift"], t["confirm_end"]):
