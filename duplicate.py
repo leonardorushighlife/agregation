@@ -41,10 +41,11 @@ class DuplicateChecker:
 
     def _get_conn(self):
         if not hasattr(self._local, "conn"):
-            self._local.conn = sqlite3.connect(self.db_path, timeout=30)
+            self._local.conn = sqlite3.connect(self.db_path, timeout=60)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn.execute("PRAGMA cache_size=-64000") # 64MB cache
+            self._local.conn.execute("PRAGMA cache_size=-128000") # 128MB cache
+            self._local.conn.execute("PRAGMA mmap_size=268435456") # 256MB
         return self._local.conn
 
     def _init_db(self):
@@ -287,9 +288,13 @@ class DuplicateChecker:
     def update_sscc_local(self, codes, sscc):
         conn = self._get_conn()
         cursor = conn.cursor()
-        for code in codes:
-            cursor.execute("UPDATE seen_codes SET sscc = ? WHERE code = ?", (sscc, code))
-        conn.commit()
+        cursor.execute("BEGIN TRANSACTION")
+        try:
+            cursor.executemany("UPDATE seen_codes SET sscc = ? WHERE code = ?", [(sscc, c) for c in codes])
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     # --- РЕЗЕРВИРОВАНИЕ ---
     def save_box_to_recovery(self, sscc, units, shift_info):

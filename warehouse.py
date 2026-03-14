@@ -17,9 +17,12 @@ class WarehouseManager:
 
     def _get_conn(self):
         if not hasattr(self._local, "conn"):
-            self._local.conn = sqlite3.connect(self.db_path, timeout=30)
+            self._local.conn = sqlite3.connect(self.db_path, timeout=60)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn.execute("PRAGMA cache_size=-128000") # 128MB
+            self._local.conn.execute("PRAGMA mmap_size=268435456") # 256MB
+            self._local.conn.execute("PRAGMA journal_size_limit=67108864") # 64MB
         return self._local.conn
 
     def _init_db(self):
@@ -34,6 +37,8 @@ class WarehouseManager:
                 receive_time DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_wh_units_box ON wh_units(box_sscc)")
+
         # Таблица коробов
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_boxes (
@@ -45,6 +50,7 @@ class WarehouseManager:
                 ship_time DATETIME
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_wh_boxes_pallet ON wh_boxes(pallet_sscc)")
         # Таблица палет
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wh_pallets (
@@ -79,6 +85,8 @@ class WarehouseManager:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_wh_history_code ON wh_history(item_code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_wh_history_time ON wh_history(timestamp)")
 
         # Миграции
         try: cursor.execute("ALTER TABLE wh_units ADD COLUMN gtin TEXT")
@@ -143,13 +151,21 @@ class WarehouseManager:
         """Регистрация палеты и привязка к ней коробов"""
         conn = self._get_conn()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (pallet_sscc, gtin))
-        for box_sscc in box_ssccs:
-            cursor.execute("UPDATE wh_boxes SET pallet_sscc = ?, status = 'in_stock', gtin = ? WHERE sscc = ?", (pallet_sscc, gtin, box_sscc))
-            # Если короба еще не было в базе (не импортировали), создаем
-            cursor.execute("INSERT OR IGNORE INTO wh_boxes (sscc, pallet_sscc, status, gtin) VALUES (?, ?, 'in_stock', ?)",
-                           (box_sscc, pallet_sscc, gtin))
-        conn.commit()
+        cursor.execute("BEGIN TRANSACTION")
+        try:
+            cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (pallet_sscc, gtin))
+
+            # Пакетное обновление существующих коробов
+            cursor.executemany("UPDATE wh_boxes SET pallet_sscc = ?, status = 'in_stock', gtin = ? WHERE sscc = ?",
+                               [(pallet_sscc, gtin, b) for b in box_ssccs])
+
+            # Пакетная вставка новых коробов
+            cursor.executemany("INSERT OR IGNORE INTO wh_boxes (sscc, pallet_sscc, status, gtin) VALUES (?, ?, 'in_stock', ?)",
+                               [(b, pallet_sscc, gtin) for b in box_ssccs])
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     def acceptance_box(self, sscc, gtin=None):
         """Приемка одиночного короба"""
@@ -162,10 +178,18 @@ class WarehouseManager:
     def register_units_in_box(self, box_sscc, unit_cis_list):
         conn = self._get_conn()
         cursor = conn.cursor()
-        for cis in unit_cis_list:
-            gtin = cis[2:16] if cis.startswith("01") else None
-            cursor.execute("INSERT OR REPLACE INTO wh_units (cis, box_sscc, gtin) VALUES (?, ?, ?)", (cis, box_sscc, gtin))
-        conn.commit()
+        cursor.execute("BEGIN TRANSACTION")
+        try:
+            data = []
+            for cis in unit_cis_list:
+                gtin = cis[2:16] if cis.startswith("01") else None
+                data.append((cis, box_sscc, gtin))
+
+            cursor.executemany("INSERT OR REPLACE INTO wh_units (cis, box_sscc, gtin) VALUES (?, ?, ?)", data)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     def shipment(self, sscc):
         """Отгрузка палеты или короба"""

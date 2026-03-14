@@ -897,6 +897,9 @@ class App:
             raise Exception(f"WinPrint Error: {e}")
 
     def trigger_conveyor_auto_sscc(self):
+        threading.Thread(target=self._bg_trigger_conveyor_auto_sscc, daemon=True).start()
+
+    def _bg_trigger_conveyor_auto_sscc(self):
         t = TEXT[self.lang]
         try:
             sscc = self.get_next_sscc_from_file("conveyor_sscc_file")
@@ -919,6 +922,9 @@ class App:
             self._msg_box(messagebox.showerror, t["error"], str(e))
 
     def trigger_pallet_auto_sscc(self):
+        threading.Thread(target=self._bg_trigger_pallet_auto_sscc, daemon=True).start()
+
+    def _bg_trigger_pallet_auto_sscc(self):
         t = TEXT[self.lang]
         try:
             sscc = self.get_next_sscc_from_file("pallet_sscc_file")
@@ -1501,20 +1507,24 @@ class App:
         if self.state.wait_sscc:
             if not raw.startswith("00"):
                 self._msg_box(messagebox.showerror, t["error"], t["err_expect_box_prefix"]); return
-            try:
-                self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
-                self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
-                self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
-                if self.config.get("warehouse_enabled"):
-                    # Сохраняем в складскую базу
-                    gtin = self.shift_info.get("gtin")
-                    self.warehouse.acceptance_box(raw, gtin=gtin)
-                    self.warehouse.register_units_in_box(raw, [u["clean"] for u in units])
-                    self.warehouse.record_history(raw, "box", "received")
+            def _task():
+                try:
+                    self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
+                    self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
+                    self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
-                self.show_last(f"{t['closed_box']}{raw}"); self.update_info()
-            except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
+                    if self.config.get("warehouse_enabled"):
+                        # Сохраняем в складскую базу
+                        gtin = self.shift_info.get("gtin")
+                        self.warehouse.acceptance_box(raw, gtin=gtin)
+                        self.warehouse.register_units_in_box(raw, [u["clean"] for u in units])
+                        self.warehouse.record_history(raw, "box", "received")
+
+                    self.show_last(f"{t['closed_box']}{raw}")
+                    self.update_info()
+                except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
+            threading.Thread(target=_task, daemon=True).start()
         else:
             if raw.startswith("00") and len(raw) >= 18:
                 self._msg_box(messagebox.showwarning, t["error"], t["warn_box_incomplete"]); return
@@ -1671,20 +1681,24 @@ class App:
             if not raw.startswith("00"):
                 # Игнорируем любые другие коды без ошибки (могут быть юниты под пленкой)
                 return
-            try:
-                self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
-                # Для палет units - это список кодов коробок
-                box_ssccs = [u['raw'] for u in units]
-                self.duplicates.update_sscc_for_units(box_ssccs, raw)
-                self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
-                if self.config.get("warehouse_enabled"):
-                    gtin = self.shift_info.get("gtin")
-                    self.warehouse.register_pallet(raw, box_ssccs, gtin=gtin)
-                    self.warehouse.record_history(raw, "pallet", "received")
+            def _task():
+                try:
+                    self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
+                    # Для палет units - это список кодов коробок
+                    box_ssccs = [u['raw'] for u in units]
+                    self.duplicates.update_sscc_for_units(box_ssccs, raw)
+                    self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
-                self.show_last(f"{t['closed_pallet']}{raw}"); self.update_info()
-            except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
+                    if self.config.get("warehouse_enabled"):
+                        gtin = self.shift_info.get("gtin")
+                        self.warehouse.register_pallet(raw, box_ssccs, gtin=gtin)
+                        self.warehouse.record_history(raw, "pallet", "received")
+
+                    self.show_last(f"{t['closed_pallet']}{raw}")
+                    self.update_info()
+                except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
+            threading.Thread(target=_task, daemon=True).start()
         else:
             # Ожидаем код коробки (начинается на 00)
             if not raw.startswith("00"):
