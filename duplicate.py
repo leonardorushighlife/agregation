@@ -19,9 +19,10 @@ class DuplicateChecker:
         self.active_clients = {}
         self._clients_lock = threading.Lock()
 
-        # Для клиента: статус подключения
+        # Для клиента: статус подключения и постоянное соединение
         self.is_connected = False
         self._socket_lock = threading.Lock()
+        self._persistent_socket = None
 
         # Кеширование соединений (thread-local)
         self._local = threading.local()
@@ -102,26 +103,29 @@ class DuplicateChecker:
 
     def _handle_client_connection(self, conn, addr):
         with conn:
-            conn.settimeout(3)
+            conn.settimeout(10)
+            buffer = b""
             try:
-                # Читаем до конца (shutdown на стороне клиента)
-                received = b""
-                while True:
+                while self.running:
                     chunk = conn.recv(8192)
                     if not chunk: break
-                    received += chunk
+                    buffer += chunk
 
-                if not received: return
-                req = json.loads(received.decode('utf-8'))
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        if not line: continue
 
-                if req.get('key') != self.access_key:
-                    res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ"}
-                else:
-                    res = self._handle_network_request(req)
+                        try:
+                            req = json.loads(line.decode('utf-8'))
+                            if req.get('key') != self.access_key:
+                                res = {"status": "error", "message": "Ошибка безопасности: Неверный ключ"}
+                            else:
+                                res = self._handle_network_request(req)
 
-                conn.sendall(json.dumps(res).encode('utf-8'))
+                            conn.sendall((json.dumps(res) + "\n").encode('utf-8'))
+                        except: continue
             except Exception as e:
-                print(f"Server error handling {addr}: {e}")
+                pass # Соединение закрыто
 
     def _run_udp_broadcast_responder(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -177,25 +181,32 @@ class DuplicateChecker:
             return {"status": "local_only"}
 
         req['key'] = self.access_key
+        data = (json.dumps(req) + "\n").encode('utf-8')
 
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.5) # Достаточно для локальной сети
-                s.connect((self.server_ip, self.port))
-                s.sendall(json.dumps(req).encode('utf-8'))
-                s.shutdown(socket.SHUT_WR) # Сигнал серверу о завершении отправки
+        with self._socket_lock:
+            try:
+                if self._persistent_socket is None:
+                    self._persistent_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self._persistent_socket.settimeout(2.0)
+                    self._persistent_socket.connect((self.server_ip, self.port))
 
-                # Читаем ответ
-                received = b""
-                while True:
-                    chunk = s.recv(8192)
-                    if not chunk: break
-                    received += chunk
+                self._persistent_socket.sendall(data)
 
-                if not received: return {"status": "error", "message": "Пустой ответ"}
-                return json.loads(received.decode('utf-8'))
-        except Exception as e:
-            return {"status": "error", "message": f"Нет связи с сервером ({e})"}
+                # Читаем ответ (одна строка JSON)
+                resp_data = b""
+                while not resp_data.endswith(b"\n"):
+                    chunk = self._persistent_socket.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("Server closed connection")
+                    resp_data += chunk
+
+                return json.loads(resp_data.decode('utf-8'))
+            except Exception as e:
+                if self._persistent_socket:
+                    try: self._persistent_socket.close()
+                    except: pass
+                    self._persistent_socket = None
+                return {"status": "error", "message": f"Нет связи с сервером ({e})"}
 
     # --- ПРОВЕРКИ ---
 

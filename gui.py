@@ -1403,12 +1403,16 @@ class App:
     def process_barcode(self, raw_input):
         if not self.scanning_active or self.paused or self.modal_open: return
         if not raw_input: return
-        self.scan_queue.put(raw_input)
 
-    def _handle_barcode_logic(self, raw_input):
-        if self.modal_open: return
-        # Заменяем раскладку
+        # Мгновенная визуальная реакция для оператора
+        # Делаем маппинг раскладки сразу в потоке захвата
         processed = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
+        self.show_last(processed)
+
+        self.scan_queue.put(processed)
+
+    def _handle_barcode_logic(self, processed):
+        if self.modal_open: return
 
         # 1. Сначала разбиваем по явным разделителям строк
         initial_parts = [p.strip() for p in processed.replace('\r', '\n').split('\n') if p.strip()]
@@ -1523,7 +1527,7 @@ class App:
                 self.show_last(parsed["raw"])
 
                 self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
-                res = self.state.scan_unit(parsed); self.update_info()
+                res = self.state.scan_unit(parsed); self.update_info(throttle=True)
 
                 if self.config.get("warehouse_enabled"):
                     self.warehouse.record_history(parsed["clean"], "unit", "received")
@@ -1700,7 +1704,7 @@ class App:
                     self.warehouse.acceptance_box(raw, gtin=gtin)
                     self.warehouse.record_history(raw, "box", "received")
 
-                self.update_info()
+                self.update_info(throttle=True)
 
                 # Если достигли 110 (или другого лимита), автоматически закрываем
                 if res == "WAIT_SSCC" and self.config.get("conveyor_enabled"):
@@ -1891,7 +1895,13 @@ class App:
                 self.scan_entry.focus_set()
         return res
 
-    def update_info(self):
+    def update_info(self, throttle=False):
+        # Оптимизация: если сканирование ОЧЕНЬ быстрое, не частим с обновлением UI
+        now = time.perf_counter()
+        if throttle and hasattr(self, "_last_ui_update"):
+            if now - self._last_ui_update < 0.1: return # Не чаще 10 раз в сек
+
+        self._last_ui_update = now
         def _upd():
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self._update_info_ui()
