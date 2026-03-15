@@ -167,7 +167,17 @@ TEXT = {
     "wh_stock_movement": "Движение товара",
     "wh_return_mode": "РЕЖИМ ВОЗВРАТА",
     "wh_scan_return": "Сканируйте SSCC для возврата",
-    "wh_returned": "ВОЗВРАЩЕНО"
+    "wh_returned": "ВОЗВРАЩЕНО",
+    "admin_email_title": "Настройки Email (SMTP)",
+    "admin_email_enable": "Использовать Email",
+    "admin_email_host": "SMTP Сервер",
+    "admin_email_port": "Порт",
+    "admin_email_user": "Логин/Email",
+    "admin_email_pass": "Пароль",
+    "admin_email_rcpt": "Получатель",
+    "admin_wechat_title": "Настройки WeChat (WeCom)",
+    "admin_wechat_enable": "Использовать WeChat",
+    "admin_wechat_webhook": "Webhook URL"
 },
 
 # =======================
@@ -338,7 +348,17 @@ TEXT = {
     "wh_shipment_label": "Shipment",
     "err_no_order": "Select order first!",
     "wh_stock_movement": "Stock Movement",
-    "report_shipment_tg": "📦 Warehouse: Shipment {0}\n🕒 Time: {1}\n🔢 Quantity: {2}"
+    "report_shipment_tg": "📦 Warehouse: Shipment {0}\n🕒 Time: {1}\n🔢 Quantity: {2}",
+    "admin_email_title": "Email Settings (SMTP)",
+    "admin_email_enable": "Enable Email",
+    "admin_email_host": "SMTP Server",
+    "admin_email_port": "Port",
+    "admin_email_user": "Login/Email",
+    "admin_email_pass": "Password",
+    "admin_email_rcpt": "Receiver",
+    "admin_wechat_title": "WeChat Settings (WeCom)",
+    "admin_wechat_enable": "Enable WeChat",
+    "admin_wechat_webhook": "Webhook URL"
 },
 
 # =======================

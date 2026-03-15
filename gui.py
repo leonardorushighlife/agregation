@@ -97,7 +97,15 @@ def load_config():
         "backup_path": "output/backup",
         "pallet_sscc_file": "",
         "cv_mode_enabled": False,
-        "camera_id": 0
+        "camera_id": 0,
+        "email_enabled": False,
+        "email_host": "",
+        "email_port": 587,
+        "email_user": "",
+        "email_pass": "",
+        "email_rcpt": "",
+        "wechat_enabled": False,
+        "wechat_webhook": ""
     }
 
     cfg = defaults.copy()
@@ -142,59 +150,57 @@ class GlobalScannerListener:
     def __init__(self, callback, space_callback=None):
         self.callback = callback
         self.space_callback = space_callback
-        self.buffer = ""
+        self.buffer = []
         self.last_key_time = 0
         self.key_times = []
         self.listener = None
+        self._lock = threading.Lock()
 
     def on_press(self, key):
         try:
-            current_time = time.perf_counter()
-            # Если пауза между символами более 500мс, считаем что это новый ввод
-            if self.buffer and self.last_key_time > 0 and (current_time - self.last_key_time > 0.5):
-                self.buffer = ""
-                self.key_times = []
-
-            is_enter = False
-            if keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
-                is_enter = True
-            elif hasattr(key, 'char') and key.char in ['\r', '\n']:
-                is_enter = True
-
-            if is_enter:
-                if self.buffer:
-                    buf = self.buffer
-                    # Проверка скорости ввода
-                    if self.key_times:
-                        avg_time = sum(self.key_times) / len(self.key_times)
-                        # Оптимизация: сканеры < 80мс, человек > 100мс
-                        if avg_time < 0.08:
-                            # Выполняем callback в отдельном потоке, чтобы не тормозить захват
-                            threading.Thread(target=self.callback, args=(buf,), daemon=True).start()
-
-                    self.buffer = ""
+            now = time.perf_counter()
+            with self._lock:
+                # Тайм-аут между символами (0.5с) - сброс буфера
+                if self.buffer and (now - self.last_key_time > 0.5):
+                    self.buffer = []
                     self.key_times = []
-                    self.last_key_time = 0
-            elif hasattr(key, 'char') and key.char:
-                char = key.char
-                self.buffer += char
-                if len(self.buffer) > 500: # Защита от мусора
-                    self.buffer = self.buffer[-500:]
-                    if self.key_times: self.key_times = self.key_times[-499:]
 
-                if self.last_key_time > 0:
-                    self.key_times.append(current_time - self.last_key_time)
-                self.last_key_time = current_time
-            elif keyboard and key == keyboard.Key.space:
-                if self.space_callback:
-                    self.space_callback()
-                else:
-                    self.buffer += " "
+                is_enter = False
+                if keyboard and (key == keyboard.Key.enter or str(key) == "Key.enter"):
+                    is_enter = True
+                elif hasattr(key, 'char') and key.char in ['\r', '\n']:
+                    is_enter = True
+
+                if is_enter:
+                    if self.buffer:
+                        if self.key_times:
+                            avg = sum(self.key_times) / len(self.key_times)
+                            if avg < 0.1: # Порог для сканера
+                                buf_str = "".join(self.buffer)
+                                threading.Thread(target=self.callback, args=(buf_str,), daemon=True).start()
+                        self.buffer = []
+                        self.key_times = []
+                        self.last_key_time = 0
+                    return
+
+                if hasattr(key, 'char') and key.char:
+                    self.buffer.append(key.char)
                     if self.last_key_time > 0:
-                        self.key_times.append(current_time - self.last_key_time)
-                    self.last_key_time = current_time
-        except:
-            pass
+                        self.key_times.append(now - self.last_key_time)
+                    self.last_key_time = now
+                    # Ограничение размера буфера
+                    if len(self.buffer) > 512:
+                        self.buffer = self.buffer[-512:]
+                        self.key_times = self.key_times[-511:]
+                elif keyboard and key == keyboard.Key.space:
+                    if self.space_callback:
+                        self.space_callback()
+                    else:
+                        self.buffer.append(" ")
+                        if self.last_key_time > 0:
+                            self.key_times.append(now - self.last_key_time)
+                        self.last_key_time = now
+        except: pass
 
     def start(self):
         if self.listener is None and keyboard:
@@ -285,6 +291,13 @@ class App:
         self.show_language_screen()
         self.check_recovery()
 
+    def _block_tkinter_keys(self, event):
+        # Если мы в режиме сканирования, блокируем прохождение клавиш в Tkinter,
+        # чтобы они не "печатались" в виджеты и не тормозили поток.
+        # pynput всё равно их поймает.
+        if self.scanning_active and not self.modal_open:
+            return "break"
+
     def check_internet_connection(self):
         try:
             # Пытаемся подключиться к Google DNS или другому надежному хосту
@@ -343,6 +356,7 @@ class App:
             self.lockout_screen()
             return
 
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title(t["login_title"])
         win.geometry("320x180")
@@ -351,16 +365,23 @@ class App:
         entry = tk.Entry(win, show="*")
         entry.pack()
 
+        def on_close():
+            self.modal_open = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         def check(event=None):
             if entry.get() == _d(ADMIN_PASSWORD_OBF):
                 self.password_attempts = 0
                 win.withdraw()
-                win.destroy()
                 self.admin_panel()
+                win.destroy()
             else:
                 self.password_attempts += 1
                 if self.password_attempts >= 3:
                     win.destroy()
+                    self.modal_open = False
                     self.lockout_screen()
                 else:
                     self._msg_box(messagebox.showerror, t["error"], t["err_wrong_pass"].format(3 - self.password_attempts))
@@ -431,6 +452,7 @@ class App:
 
         remaining = self.config["lockout_until"] - now
 
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title(t["access_blocked_title"])
         win.geometry("600x400")
@@ -449,6 +471,7 @@ class App:
         def update_timer():
             nonlocal remaining
             if remaining <= 0:
+                self.modal_open = False
                 win.destroy()
             else:
                 lbl_timer.config(text=t["remaining_time"].format(f"{remaining // 60:02d}:{remaining % 60:02d}"))
@@ -471,6 +494,7 @@ class App:
 
     def show_stealth_settings(self):
         t = TEXT[self.lang]
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title("Stealth Settings")
         win.geometry("400x200")
@@ -485,6 +509,12 @@ class App:
         chat_e.insert(0, self.config.get("stealth_chat_id", ""))
         chat_e.pack()
 
+        def on_close():
+            self.modal_open = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         def save():
             self.config["stealth_token"] = token_e.get()
             self.config["stealth_chat_id"] = chat_e.get()
@@ -492,13 +522,14 @@ class App:
             self.stealth.token = self.config["stealth_token"]
             self.stealth.chat_id = self.config["stealth_chat_id"]
             self._msg_box(messagebox.showinfo, t["success"], "Stealth settings saved")
-            win.destroy()
+            on_close()
 
         tk.Button(win, text="Save", command=save).pack(pady=20)
 
     def admin_panel(self):
         # ТЗ: Админ-панель всегда на Русском
         t = TEXT["ru"]
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title(t["admin_panel_title"])
         win.geometry("650x600")
@@ -580,6 +611,30 @@ class App:
 
         row += 1
         bp_e = block("Backup Path", self.config.get("backup_path", "output/backup"), None, row)
+
+        row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_email_title", "Email Settings"), font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
+        row += 1
+        em_v = tk.BooleanVar(value=self.config.get("email_enabled", False))
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_email_enable", "Enable Email"), variable=em_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+        row += 1
+        em_h = block(t.get("admin_email_host", "SMTP Host"), self.config.get("email_host", ""), None, row)
+        row += 1
+        em_p = block(t.get("admin_email_port", "Port"), self.config.get("email_port", 587), None, row)
+        row += 1
+        em_u = block(t.get("admin_email_user", "User"), self.config.get("email_user", ""), None, row)
+        row += 1
+        em_pass = block(t.get("admin_email_pass", "Password"), self.config.get("email_pass", ""), None, row)
+        row += 1
+        em_r = block(t.get("admin_email_rcpt", "Recipient"), self.config.get("email_rcpt", ""), None, row)
+
+        row += 1
+        tk.Label(scrollable_frame, text=t.get("admin_wechat_title", "WeChat Settings"), font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
+        row += 1
+        wc_v = tk.BooleanVar(value=self.config.get("wechat_enabled", False))
+        tk.Checkbutton(scrollable_frame, text=t.get("admin_wechat_enable", "Enable WeChat"), variable=wc_v, bg="#f0f0f0").grid(row=row, column=1, sticky="w")
+        row += 1
+        wc_w = block(t.get("admin_wechat_webhook", "Webhook URL"), self.config.get("wechat_webhook", ""), None, row)
 
         if self.config.get("is_server"):
             row += 1
@@ -699,11 +754,19 @@ class App:
         tk.Button(btn_o, text="Экспорт", command=exp_o).pack(side="left", padx=2)
         tk.Button(btn_o, text="Импорт", command=imp_o).pack(side="left", padx=2)
 
+        def on_close():
+            self.modal_open = False
+            win.unbind_all("<MouseWheel>")
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         def save():
             t = TEXT[self.lang]
             try:
                 b_size = int(box_e.get())
                 b_baud = int(baud_e.get())
+                e_port = int(em_p.get())
             except:
                 self._msg_box(messagebox.showerror, t["error"], "Invalid numbers")
                 return
@@ -740,14 +803,21 @@ class App:
                 "warehouse_enabled": wh_v.get(),
                 "backup_path": bp_e.get(),
                 "cv_mode_enabled": cv_v.get(),
-                "camera_id": int(cam_e.get() or 0)
+                "camera_id": int(cam_e.get() or 0),
+                "email_enabled": em_v.get(),
+                "email_host": em_h.get(),
+                "email_port": e_port,
+                "email_user": em_u.get(),
+                "email_pass": em_pass.get(),
+                "email_rcpt": em_r.get(),
+                "wechat_enabled": wc_v.get(),
+                "wechat_webhook": wc_w.get()
             })
             save_config(self.config)
             if self.config["com_enabled"]:
                 self.start_serial_reader()
             self._msg_box(messagebox.showinfo, t["success"], t["settings_saved"])
-            win.unbind_all("<MouseWheel>")
-            win.destroy()
+            on_close()
 
         tk.Button(scrollable_frame, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
 
@@ -949,6 +1019,7 @@ class App:
 
     def scanner_diag(self):
         t = TEXT[self.lang]
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title(t["admin_scanner_diag"])
         win.geometry("500x380")
@@ -962,6 +1033,11 @@ class App:
             hex_v = " ".join([f"{ord(c):02x}" for c in raw])
             text_area.delete("1.0", tk.END); text_area.insert(tk.END, f"{t['admin_received']}: {vis}\n\nHEX: {hex_v}\n\n{t['admin_length']}: {len(raw)}")
             return "break"
+        def on_close():
+            self.modal_open = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
         diag_entry.bind("<Return>", on_diag_scan)
 
     def show_shift_form(self):
@@ -1107,6 +1183,7 @@ class App:
         pending_orders = self.warehouse.get_pending_orders()
         shipped_orders = self.warehouse.get_shipped_orders()
 
+        self.modal_open = True
         win = tk.Toplevel(self.root)
         win.title(t["lbl_order_select"])
         win.geometry("700x500")
@@ -1137,6 +1214,12 @@ class App:
             tree2.insert("", "end", values=(o['num'], o['product'], o['units'], o['rc']))
         tree2.pack(expand=True, fill="both")
 
+        def on_close():
+            self.modal_open = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         def select():
             orders = pending_orders + shipped_orders
             sel = tree.selection() or tree2.selection()
@@ -1166,7 +1249,7 @@ class App:
                 self.current_order_data['req_pallets'] = 0
                 self.current_order_data['req_boxes'] = 0
 
-            win.destroy()
+            on_close()
             self.shift_info = {"date": self.entry_date.get(), "workplace": self.entry_wp.get(), "name": self.entry_name.get()}
             self.state.reset(0, mode="shipment") # В режиме отгрузки лимита нет
             self.show_scan_screen()
@@ -1252,6 +1335,83 @@ class App:
             return
         self.root.destroy()
 
+    def send_broadcast_notification(self, text, files=None):
+        # Отправка во все настроенные каналы
+        self.send_to_telegram_msg(text, files)
+        self.send_to_wechat_msg(text, files)
+        self.send_to_email_msg(text, files)
+
+    def send_to_telegram_msg(self, text, files=None):
+        t = self.config.get("tg_token"); c = self.config.get("tg_chat_id")
+        if not t or not c: return
+        def _send():
+            try:
+                requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": text}, timeout=15)
+                if files:
+                    for p in files:
+                        if os.path.exists(p):
+                            with open(p, "rb") as f:
+                                requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f}, timeout=30)
+            except: pass
+        threading.Thread(target=_send, daemon=True).start()
+
+    def send_to_wechat_msg(self, text, files=None):
+        if not self.config.get("wechat_enabled"): return
+        webhook = self.config.get("wechat_webhook")
+        if not webhook: return
+        def _send():
+            try:
+                # Текст
+                requests.post(webhook, json={"msgtype": "text", "text": {"content": text}}, timeout=15)
+                # Файлы
+                if files:
+                    key_match = re.search(r"key=([a-zA-Z0-9-]+)", webhook)
+                    if key_match:
+                        key = key_match.group(1)
+                        upload_url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={key}&type=file"
+                        for p in files:
+                            if os.path.exists(p):
+                                with open(p, "rb") as f:
+                                    r = requests.post(upload_url, files={"media": (os.path.basename(p), f)}, timeout=30)
+                                    if r.status_code == 200:
+                                        media_id = r.json().get("media_id")
+                                        if media_id:
+                                            requests.post(webhook, json={"msgtype": "file", "file": {"media_id": media_id}}, timeout=15)
+            except: pass
+        threading.Thread(target=_send, daemon=True).start()
+
+    def send_to_email_msg(self, text, files=None):
+        if not self.config.get("email_enabled"): return
+        host = self.config.get("email_host")
+        port = self.config.get("email_port")
+        user = self.config.get("email_user")
+        password = self.config.get("email_pass")
+        rcpt = self.config.get("email_rcpt")
+        if not all([host, port, user, password, rcpt]): return
+        def _send():
+            try:
+                import smtplib
+                from email.mime.multipart import MIMEMultipart
+                from email.mime.text import MIMEText
+                from email.mime.base import MIMEBase
+                from email import encoders
+                msg = MIMEMultipart()
+                msg['From'] = user; msg['To'] = rcpt; msg['Subject'] = f"Aggregator Report: {self.shift_info.get('name', 'App')}"
+                msg.attach(MIMEText(text, 'plain'))
+                if files:
+                    for p in files:
+                        if os.path.exists(p):
+                            part = MIMEBase('application', "octet-stream")
+                            with open(p, "rb") as f: part.set_payload(f.read())
+                            encoders.encode_base64(part)
+                            part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(p)}"')
+                            msg.attach(part)
+                server = smtplib.SMTP(host, port)
+                server.starttls(); server.login(user, password)
+                server.send_message(msg); server.quit()
+            except: pass
+        threading.Thread(target=_send, daemon=True).start()
+
     def end_shift(self):
         t = TEXT[self.lang]
         if self.state.in_box != 0:
@@ -1260,7 +1420,9 @@ class App:
         if self._msg_box(messagebox.askokcancel, t["end_shift"], t["confirm_end"]):
             self.scanning_active = False
             files = self.perform_save()
-            self.send_to_telegram(files)
+
+            summary_text = self.get_summary_text()
+            self.send_broadcast_notification(summary_text, files)
 
             if self.agg_mode == "warehouse_ship" and self.current_order:
                 # Проверяем, полностью ли отгружен заказ
@@ -1269,29 +1431,16 @@ class App:
                 if shipped >= total:
                     self.warehouse.complete_order(self.current_order)
 
-                # Отправка спец сообщения в ТГ
-                self.send_shipment_summary_tg()
+                ship_summary = t["report_shipment_tg"].format(
+                    self.current_order,
+                    datetime.now().strftime("%H:%M:%S"),
+                    self.state.get_shift_summary()["total_codes"]
+                )
+                self.send_broadcast_notification(ship_summary)
                 self.current_order = None
 
             self.duplicates.clear_recovery()
             self.show_language_screen()
-
-    def send_shipment_summary_tg(self):
-        t = TEXT[self.lang]
-        token = self.config.get("tg_token")
-        chat_id = self.config.get("tg_chat_id")
-        if not token or not chat_id: return
-
-        summary = self.state.get_shift_summary()
-        msg = t["report_shipment_tg"].format(
-            self.current_order,
-            datetime.now().strftime("%H:%M:%S"),
-            summary["total_codes"]
-        )
-        def _send():
-            try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg}, timeout=10)
-            except: pass
-        threading.Thread(target=_send, daemon=True).start()
 
     def close_partial_pallet(self):
         t = TEXT[self.lang]
@@ -1377,16 +1526,7 @@ class App:
                f"🔄 {t.get('wh_returned_today', 'Returned Today')}: {rep['returned_today']}")
         self._msg_box(messagebox.showinfo, t.get("wh_stock", "Stock"), msg)
 
-        # Отправка в TG
-        token = self.config.get("tg_token")
-        chat_id = self.config.get("tg_chat_id")
-        if token and chat_id:
-            def _send():
-                try:
-                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                                  data={"chat_id": chat_id, "text": f"📊 {t.get('wh_stock', 'Stock Report')}\n{msg}"}, timeout=10)
-                except: pass
-            threading.Thread(target=_send, daemon=True).start()
+        self.send_broadcast_notification(f"📊 {t.get('wh_stock', 'Stock Report')}\n{msg}")
 
     def on_scan_box_acceptance(self, raw):
         t = TEXT[self.lang]
@@ -1424,8 +1564,10 @@ class App:
         if not self.scanning_active or self.paused or self.modal_open: return
         if not raw_input: return
 
+        # Очистка невидимого Entry в главном потоке (чтобы не копилось в активном окне)
+        self.root.after(0, lambda: self.scan_entry.delete(0, tk.END))
+
         # Мгновенная визуальная реакция для оператора
-        # Делаем маппинг раскладки сразу в потоке захвата
         processed = "".join([LAYOUT_MAP.get(c, c) if ord(c)>=32 else c for c in raw_input])
         self.show_last(processed)
 
@@ -1632,13 +1774,7 @@ class App:
             if ok:
                 self.warehouse.record_history(raw, item_type, "returned")
                 self.show_last(f"{t.get('wh_returned', 'RETURNED')}: {raw}")
-
-                # Уведомление в TG
-                token = self.config.get("tg_token")
-                chat_id = self.config.get("tg_chat_id")
-                if token and chat_id:
-                    threading.Thread(target=requests.post, args=(f"https://api.telegram.org/bot{token}/sendMessage",),
-                                     kwargs={"data": {"chat_id": chat_id, "text": f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})"}}).start()
+                self.send_broadcast_notification(f"🔄 {t.get('wh_returned', 'Returned')}: {raw} ({item_type})")
             else:
                 self._msg_box(messagebox.showwarning, t["error"], t.get('err_not_found', "Item not found in database"))
         except Exception as e:
@@ -1854,30 +1990,18 @@ class App:
             f.write(f"{t_ru['report_dup']}\n" + "="*20 + "\n")
             for d in dups: f.write(f"{t_ru['report_time']}: {d['time']}\n{t_ru['report_code']}: {d['code']}\n{t_ru['report_prev']}: {d['operator']} (РМ {d['workplace']})\n{'-'*10}\n")
 
-    def send_to_telegram(self, files):
+    def get_summary_text(self):
         tk_l = TEXT[self.lang]
-        t = self.config.get("tg_token"); c = self.config.get("tg_chat_id")
-        if not t or not c: return
+        sum_data = self.state.get_shift_summary()
+        dur = datetime.now() - self.state.shift_start_time
+        total_seconds = int(dur.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        time_str = f"{hours}h {minutes}m"
+        msg = f"👤 {tk_l['tg_op']}: {self.shift_info['name']}\n📦 {tk_l['tg_boxes']}: {sum_data['total_boxes']}\n🔢 {tk_l['tg_codes']}: {sum_data['total_codes']}\n🕒 {tk_l['tg_time']}: {time_str}"
+        if sum_data.get("duplicates"): msg += f"\n🚫 {tk_l['tg_dups']}: {len(sum_data['duplicates'])}"
+        return msg
 
-        def _send():
-            try:
-                sum_data = self.state.get_shift_summary()
-                dur = datetime.now() - self.state.shift_start_time
-                total_seconds = int(dur.total_seconds())
-                hours = total_seconds // 3600
-                minutes = (total_seconds % 3600) // 60
-                time_str = f"{hours}h {minutes}m"
-                msg = f"👤 {tk_l['tg_op']}: {self.shift_info['name']}\n📦 {tk_l['tg_boxes']}: {sum_data['total_boxes']}\n🔢 {tk_l['tg_codes']}: {sum_data['total_codes']}\n🕒 {tk_l['tg_time']}: {time_str}"
-                if sum_data.get("duplicates"): msg += f"\n🚫 {tk_l['tg_dups']}: {len(sum_data['duplicates'])}"
-                requests.post(f"https://api.telegram.org/bot{t}/sendMessage", data={"chat_id": c, "text": msg}, timeout=15)
-                for p in files:
-                    if os.path.exists(p):
-                        with open(p, "rb") as f:
-                            requests.post(f"https://api.telegram.org/bot{t}/sendDocument", data={"chat_id": c}, files={"document": f}, timeout=30)
-            except Exception as e:
-                print(f"Telegram send error: {e}")
-
-        threading.Thread(target=_send, daemon=True).start()
 
     def show_last(self, text):
         def _upd():
