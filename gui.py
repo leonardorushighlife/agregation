@@ -163,12 +163,14 @@ class GlobalScannerListener:
 
             if is_enter:
                 if self.buffer:
+                    buf = self.buffer
                     # Проверка скорости ввода
                     if self.key_times:
                         avg_time = sum(self.key_times) / len(self.key_times)
                         # Оптимизация: сканеры < 80мс, человек > 100мс
                         if avg_time < 0.08:
-                            self.callback(self.buffer)
+                            # Выполняем callback в отдельном потоке, чтобы не тормозить захват
+                            threading.Thread(target=self.callback, args=(buf,), daemon=True).start()
 
                     self.buffer = ""
                     self.key_times = []
@@ -1175,11 +1177,21 @@ class App:
         t = TEXT[self.lang]
         self.clear()
         self.scanning_active = True
-        self.info = tk.Label(self.root, font=("Arial", 16), justify="center"); self.info.pack(pady=20)
+
+        self.info_var = tk.StringVar()
+        self.info = tk.Label(self.root, textvariable=self.info_var, font=("Arial", 16), justify="center")
+        self.info.pack(pady=20)
+
         if self.config.get("is_server"):
             tk.Label(self.root, text=f"{t['server_ip_label']}: {get_local_ip()}", fg="#333", font=("Arial", 10)).pack()
-        self.last = tk.Entry(self.root, state="readonly", width=60, font=("Arial", 14), justify="center"); self.last.pack(pady=15)
-        self.conn_lbl = tk.Label(self.root, text="", font=("Arial", 9)); self.conn_lbl.pack(side="bottom", pady=5)
+
+        self.last_var = tk.StringVar()
+        self.last = tk.Entry(self.root, textvariable=self.last_var, state="readonly", width=60, font=("Arial", 14), justify="center")
+        self.last.pack(pady=15)
+
+        self.conn_var = tk.StringVar()
+        self.conn_lbl = tk.Label(self.root, textvariable=self.conn_var, font=("Arial", 9))
+        self.conn_lbl.pack(side="bottom", pady=5)
 
         # Скрытое поле для удержания фокуса
         self.scan_entry = tk.Entry(self.root)
@@ -1211,13 +1223,16 @@ class App:
 
     def update_connection_status(self):
         t = TEXT[self.lang]
-        # Защита от обращения к уничтоженному виджету
         if not hasattr(self, "conn_lbl") or not self.conn_lbl.winfo_exists():
             return
 
         if not self.config.get("is_server"):
-            if self.duplicates.is_connected: self.conn_lbl.config(text=f"● {t['connected']}", fg="green")
-            else: self.conn_lbl.config(text=f"○ {t['disconnected']}", fg="red")
+            if self.duplicates.is_connected:
+                self.conn_var.set(f"● {t['connected']}")
+                self.conn_lbl.config(fg="green")
+            else:
+                self.conn_var.set(f"○ {t['disconnected']}")
+                self.conn_lbl.config(fg="red")
 
         if self.conn_lbl.winfo_exists():
             self.root.after(5000, self.update_connection_status)
@@ -1403,8 +1418,7 @@ class App:
                 last_time = now
 
                 self._handle_barcode_logic(raw_input)
-            except Exception as e:
-                print(f"Worker thread error: {e}")
+            except: pass
 
     def process_barcode(self, raw_input):
         if not self.scanning_active or self.paused or self.modal_open: return
@@ -1867,7 +1881,9 @@ class App:
 
     def show_last(self, text):
         def _upd():
-            self.last.config(state="normal"); self.last.delete(0, tk.END); self.last.insert(0, text); self.last.config(state="readonly")
+            if hasattr(self, "last_var"):
+                self.last_var.set(text)
+                self.root.update_idletasks() # Принудительная перерисовка
         self.root.after(0, _upd)
 
     def play_error_sound(self):
@@ -1922,10 +1938,12 @@ class App:
         self.root.after(0, _upd)
 
     def _update_info_ui(self):
+        if not hasattr(self, "info_var"): return
         t = TEXT[self.lang]
         if self.agg_mode == "warehouse_return":
             txt = f"🔄 {t.get('wh_return_mode', 'RETURN MODE')}\n{t.get('wh_scan_return', 'Scan SSCC for return')}"
-            self.info.config(text=txt, fg="blue")
+            self.info.config(fg="blue")
+            self.info_var.set(txt)
             return
 
         if self.agg_mode == "warehouse_ship" or self.warehouse_shipment_mode:
@@ -1937,7 +1955,8 @@ class App:
                 txt += f"✅ Собрано: {self.state.box-1} пал. {self.state.in_box} кор."
             else:
                 txt = f"🚚 {t.get('wh_shipment_active', 'SHIPMENT ACTIVE')}\n{t.get('wh_scan_sscc', 'Scan SSCC for shipment')}"
-            self.info.config(text=txt, fg="orange")
+            self.info.config(fg="orange")
+            self.info_var.set(txt)
             return
 
         self.info.config(fg="black")
@@ -1947,7 +1966,7 @@ class App:
             label = t["pallet"] if (self.state.mode == "pallet" or self.agg_mode == "warehouse") else t["box"]
             sub_label = t["boxes_count"] if (self.state.mode == "pallet" or self.agg_mode == "warehouse") else t["collected"]
             txt = f"{label}: {self.state.box}\n{sub_label}: {self.state.in_box} / {self.state.box_size}"
-        self.info.config(text=txt)
+        self.info_var.set(txt)
 
 def run(): App().root.mainloop()
 if __name__ == "__main__": run()
