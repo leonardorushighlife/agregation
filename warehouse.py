@@ -153,7 +153,7 @@ class WarehouseManager:
         cursor = conn.cursor()
         cursor.execute("BEGIN TRANSACTION")
         try:
-            cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc, gtin) VALUES (?, ?)", (pallet_sscc, gtin))
+            cursor.execute("INSERT OR REPLACE INTO wh_pallets (sscc, status, gtin) VALUES (?, 'in_stock', ?)", (pallet_sscc, gtin))
 
             # Пакетное обновление существующих коробов
             cursor.executemany("UPDATE wh_boxes SET pallet_sscc = ?, status = 'in_stock', gtin = ? WHERE sscc = ?",
@@ -162,6 +162,8 @@ class WarehouseManager:
             # Пакетная вставка новых коробов
             cursor.executemany("INSERT OR IGNORE INTO wh_boxes (sscc, pallet_sscc, status, gtin) VALUES (?, ?, 'in_stock', ?)",
                                [(b, pallet_sscc, gtin) for b in box_ssccs])
+
+            cursor.execute("INSERT INTO wh_history (item_code, item_type, action) VALUES (?, 'pallet', 'received')", (pallet_sscc,))
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -175,17 +177,21 @@ class WarehouseManager:
         conn.commit()
         return True
 
-    def register_units_in_box(self, box_sscc, unit_cis_list):
+    def register_units_in_box(self, box_sscc, unit_cis_list, gtin=None):
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("BEGIN TRANSACTION")
         try:
+            cursor.execute("INSERT OR REPLACE INTO wh_boxes (sscc, status, gtin) VALUES (?, 'in_stock', ?)", (box_sscc, gtin))
+
             data = []
             for cis in unit_cis_list:
-                gtin = cis[2:16] if cis.startswith("01") else None
-                data.append((cis, box_sscc, gtin))
+                u_gtin = cis[2:16] if cis.startswith("01") else gtin
+                data.append((cis, box_sscc, u_gtin))
 
             cursor.executemany("INSERT OR REPLACE INTO wh_units (cis, box_sscc, gtin) VALUES (?, ?, ?)", data)
+
+            cursor.execute("INSERT INTO wh_history (item_code, item_type, action) VALUES (?, 'box', 'received')", (box_sscc,))
             conn.commit()
         except Exception as e:
             conn.rollback()
