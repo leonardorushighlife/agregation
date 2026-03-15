@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+output/
+data/duplicates.db
+config_local.bin
+temp_labels/
