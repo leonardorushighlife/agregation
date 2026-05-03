@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import messagebox
 import json
 import os
+import socket
+import socks
 from datetime import datetime
 
 from i18n import TEXT
@@ -38,7 +40,14 @@ def load_config():
             "tnved_enabled": False,
 
             "ds_number": "",
-            "ds_enabled": False
+            "ds_enabled": False,
+
+            "proxy_enabled": False,
+            "proxy_type": "SOCKS5",
+            "proxy_host": "",
+            "proxy_port": "",
+            "proxy_user": "",
+            "proxy_pass": ""
         }
         save_config(cfg)
         return cfg
@@ -64,6 +73,7 @@ def days_passed(date_str):
 class App:
     def __init__(self):
         self.config = load_config()
+        self.init_proxy()
 
         if self.config["limit_enabled"]:
             if days_passed(self.config["first_run"]) >= 180:
@@ -85,6 +95,29 @@ class App:
         self.show_language_screen()
 
     # -------------------------------------------------
+    def init_proxy(self):
+        if self.config.get("proxy_enabled"):
+            p_type = self.config.get("proxy_type", "SOCKS5")
+            p_host = self.config.get("proxy_host")
+            p_port = self.config.get("proxy_port")
+            p_user = self.config.get("proxy_user")
+            p_pass = self.config.get("proxy_pass")
+
+            if p_host and p_port:
+                try:
+                    socks_type = socks.SOCKS5 if p_type == "SOCKS5" else socks.HTTP
+                    socks.set_default_proxy(
+                        socks_type,
+                        p_host,
+                        int(p_port),
+                        username=p_user if p_user else None,
+                        password=p_pass if p_pass else None
+                    )
+                    socket.socket = socks.socksocket
+                    print(f"Proxy initialized: {p_type} {p_host}:{p_port}")
+                except Exception as e:
+                    print(f"Proxy init error: {e}")
+
     def clear(self):
         for w in self.root.winfo_children():
             w.destroy()
@@ -178,6 +211,38 @@ class App:
         row += 1
         ds_e, ds_v = block("DS number", self.config["ds_number"], self.config["ds_enabled"], row)
 
+        row += 1
+        tk.Label(win, text="VPN / Proxy Settings", font=("Arial", 10, "bold")).grid(row=row, column=0, pady=10)
+        row += 1
+        proxy_v = tk.BooleanVar(value=self.config.get("proxy_enabled", False))
+        tk.Checkbutton(win, text="Enable Proxy (Russia/China)", variable=proxy_v).grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text="Type").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_type_var = tk.StringVar(value=self.config.get("proxy_type", "SOCKS5"))
+        from tkinter import ttk
+        proxy_type_cb = ttk.Combobox(win, textvariable=proxy_type_var, values=["SOCKS5", "HTTP"], width=10)
+        proxy_type_cb.grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text="Host").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_host_e = tk.Entry(win, width=30)
+        proxy_host_e.insert(0, self.config.get("proxy_host", ""))
+        proxy_host_e.grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text="Port").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_port_e = tk.Entry(win, width=10)
+        proxy_port_e.insert(0, str(self.config.get("proxy_port", "")))
+        proxy_port_e.grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text="User").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_user_e = tk.Entry(win, width=20)
+        proxy_user_e.insert(0, self.config.get("proxy_user", ""))
+        proxy_user_e.grid(row=row, column=1, sticky="w")
+        row += 1
+        tk.Label(win, text="Pass").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_pass_e = tk.Entry(win, width=20, show="*")
+        proxy_pass_e.insert(0, self.config.get("proxy_pass", ""))
+        proxy_pass_e.grid(row=row, column=1, sticky="w")
+
         def save():
             try:
                 val = int(box_entry.get())
@@ -201,10 +266,17 @@ class App:
                 "tnved_enabled": tnved_v.get(),
 
                 "ds_number": ds_e.get().strip(),
-                "ds_enabled": ds_v.get()
+                "ds_enabled": ds_v.get(),
+                "proxy_enabled": proxy_v.get(),
+                "proxy_type": proxy_type_var.get(),
+                "proxy_host": proxy_host_e.get().strip(),
+                "proxy_port": proxy_port_e.get().strip(),
+                "proxy_user": proxy_user_e.get().strip(),
+                "proxy_pass": proxy_pass_e.get().strip()
             })
 
             save_config(self.config)
+            self.init_proxy()
             self.state.reset(val)
             messagebox.showinfo("OK", "Saved")
             win.destroy()
