@@ -1,0 +1,12 @@
+requests
+PySocks
+openpyxl
+cryptography
+pyinstaller
+pillow
+python-barcode
+reportlab
+pyserial
+pynput
+opencv-python
+pylibdmtx

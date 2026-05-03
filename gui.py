@@ -2,8 +2,10 @@ import tkinter as tk
 from tkinter import messagebox
 import json
 import os
+import socket
 from datetime import datetime
 
+import socks
 from i18n import TEXT
 from state import State
 from gs1 import parse_gs1
@@ -38,7 +40,14 @@ def load_config():
             "tnved_enabled": False,
 
             "ds_number": "",
-            "ds_enabled": False
+            "ds_enabled": False,
+
+            "proxy_enabled": False,
+            "proxy_type": "SOCKS5",
+            "proxy_host": "",
+            "proxy_port": "",
+            "proxy_user": "",
+            "proxy_pass": ""
         }
         save_config(cfg)
         return cfg
@@ -64,6 +73,7 @@ def days_passed(date_str):
 class App:
     def __init__(self):
         self.config = load_config()
+        self.init_proxy()
 
         if self.config["limit_enabled"]:
             if days_passed(self.config["first_run"]) >= 180:
@@ -83,6 +93,32 @@ class App:
         self.root.resizable(False, False)
 
         self.show_language_screen()
+
+    def init_proxy(self):
+        if not self.config.get("proxy_enabled"):
+            return
+
+        ptype = self.config.get("proxy_type", "SOCKS5")
+        host = self.config.get("proxy_host")
+        port = self.config.get("proxy_port")
+        user = self.config.get("proxy_user")
+        pwd = self.config.get("proxy_pass")
+
+        if not host or not port:
+            return
+
+        try:
+            proxy_type = socks.SOCKS5 if ptype == "SOCKS5" else socks.HTTP
+            socks.set_default_proxy(
+                proxy_type,
+                host,
+                int(port),
+                username=user if user else None,
+                password=pwd if pwd else None
+            )
+            socket.socket = socks.socksocket
+        except Exception as e:
+            print(f"Proxy error: {e}")
 
     # -------------------------------------------------
     def clear(self):
@@ -147,7 +183,7 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Admin panel")
-        win.geometry("520x520")
+        win.geometry("520x620")
         win.resizable(False, False)
 
         def block(title, value, enabled, row):
@@ -178,6 +214,30 @@ class App:
         row += 1
         ds_e, ds_v = block("DS number", self.config["ds_number"], self.config["ds_enabled"], row)
 
+        row += 1
+        tk.Label(win, text="--- Proxy / VPN ---", font=("Arial", 10, "bold")).grid(row=row, columnspan=3, pady=10)
+
+        row += 1
+        tk.Label(win, text="Proxy Host:Port").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        px_host = tk.Entry(win, width=25)
+        px_host.insert(0, self.config.get("proxy_host", ""))
+        px_host.grid(row=row, column=1, sticky="w")
+        px_port = tk.Entry(win, width=10)
+        px_port.insert(0, str(self.config.get("proxy_port", "")))
+        px_port.grid(row=row, column=1, sticky="e")
+
+        px_v = tk.BooleanVar(value=self.config.get("proxy_enabled", False))
+        tk.Checkbutton(win, variable=px_v).grid(row=row, column=2)
+
+        row += 1
+        tk.Label(win, text="User:Pass").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        px_user = tk.Entry(win, width=15)
+        px_user.insert(0, self.config.get("proxy_user", ""))
+        px_user.grid(row=row, column=1, sticky="w")
+        px_pass = tk.Entry(win, width=15)
+        px_pass.insert(0, self.config.get("proxy_pass", ""))
+        px_pass.grid(row=row, column=1, sticky="e")
+
         def save():
             try:
                 val = int(box_entry.get())
@@ -201,7 +261,13 @@ class App:
                 "tnved_enabled": tnved_v.get(),
 
                 "ds_number": ds_e.get().strip(),
-                "ds_enabled": ds_v.get()
+                "ds_enabled": ds_v.get(),
+
+                "proxy_enabled": px_v.get(),
+                "proxy_host": px_host.get().strip(),
+                "proxy_port": px_port.get().strip(),
+                "proxy_user": px_user.get().strip(),
+                "proxy_pass": px_pass.get().strip()
             })
 
             save_config(self.config)
