@@ -71,6 +71,8 @@ def days_passed(date_str):
 # -------------------------------------------------
 
 class App:
+    _original_socket = socket.socket
+
     def __init__(self):
         self.config = load_config()
         self.init_proxy()
@@ -117,6 +119,9 @@ class App:
                     print(f"Proxy initialized: {p_type} {p_host}:{p_port}")
                 except Exception as e:
                     print(f"Proxy init error: {e}")
+        else:
+            socket.socket = self._original_socket
+            print("Proxy disabled")
 
     def clear(self):
         for w in self.root.winfo_children():
@@ -242,6 +247,9 @@ class App:
         proxy_pass_e = tk.Entry(win, width=20, show="*")
         proxy_pass_e.insert(0, self.config.get("proxy_pass", ""))
         proxy_pass_e.grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(win, text="Check VPN_INSTRUCTIONS.md for help", fg="gray", font=("Arial", 8)).grid(row=row, column=1, sticky="w")
 
         def save():
             try:
