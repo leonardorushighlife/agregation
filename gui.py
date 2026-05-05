@@ -1,8 +1,16 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import json
 import os
+import socket
 from datetime import datetime
+
+try:
+    import socks
+except ImportError:
+    socks = None
+
+_ORIGINAL_SOCKET = socket.socket
 
 from i18n import TEXT
 from state import State
@@ -38,7 +46,14 @@ def load_config():
             "tnved_enabled": False,
 
             "ds_number": "",
-            "ds_enabled": False
+            "ds_enabled": False,
+
+            "proxy_enabled": False,
+            "proxy_type": "SOCKS5",
+            "proxy_host": "",
+            "proxy_port": "",
+            "proxy_user": "",
+            "proxy_pass": ""
         }
         save_config(cfg)
         return cfg
@@ -50,6 +65,31 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+
+def apply_proxy(cfg):
+    if not cfg.get("proxy_enabled") or not socks:
+        socket.socket = _ORIGINAL_SOCKET
+        return
+
+    ptype = socks.SOCKS5 if cfg.get("proxy_type") == "SOCKS5" else socks.HTTP
+    try:
+        port_str = str(cfg.get("proxy_port", "0"))
+        port = int(port_str) if port_str.isdigit() else 0
+        if port == 0:
+            socket.socket = _ORIGINAL_SOCKET
+            return
+
+        socks.set_default_proxy(
+            ptype,
+            cfg.get("proxy_host"),
+            port,
+            username=cfg.get("proxy_user"),
+            password=cfg.get("proxy_pass")
+        )
+        socket.socket = socks.socksocket
+    except:
+        socket.socket = _ORIGINAL_SOCKET
 
 
 def days_passed(date_str):
@@ -64,6 +104,7 @@ def days_passed(date_str):
 class App:
     def __init__(self):
         self.config = load_config()
+        apply_proxy(self.config)
 
         if self.config["limit_enabled"]:
             if days_passed(self.config["first_run"]) >= 180:
@@ -147,36 +188,89 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Admin panel")
-        win.geometry("520x520")
+        win.geometry("560x700")
         win.resizable(False, False)
 
-        def block(title, value, enabled, row):
-            tk.Label(win, text=title, anchor="w").grid(row=row, column=0, sticky="w", padx=10, pady=5)
-            e = tk.Entry(win, width=40)
+        canvas = tk.Canvas(win)
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def block(parent, title, value, enabled, row):
+            tk.Label(parent, text=title, anchor="w").grid(row=row, column=0, sticky="w", padx=10, pady=5)
+            e = tk.Entry(parent, width=30)
             e.insert(0, value)
             e.grid(row=row, column=1, padx=5)
             v = tk.BooleanVar(value=enabled)
-            tk.Checkbutton(win, variable=v).grid(row=row, column=2)
+            tk.Checkbutton(parent, variable=v).grid(row=row, column=2)
             return e, v
 
         row = 0
-        tk.Label(win, text="Box size (5–200)").grid(row=row, column=0, padx=10, pady=5, sticky="w")
-        box_entry = tk.Entry(win, width=10)
+        tk.Label(scrollable_frame, text="Box size (5–200)").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        box_entry = tk.Entry(scrollable_frame, width=10)
         box_entry.insert(0, str(self.config["box_size"]))
         box_entry.grid(row=row, column=1, sticky="w")
 
         limit_var = tk.BooleanVar(value=self.config["limit_enabled"])
-        tk.Checkbutton(win, text="Enable 180 days limit", variable=limit_var)\
+        tk.Checkbutton(scrollable_frame, text="Enable 180 days limit", variable=limit_var)\
             .grid(row=row, column=2, padx=10)
 
         row += 1
-        gtin_e, gtin_v = block("GTIN", self.config["gtin"], self.config["gtin_enabled"], row)
+        gtin_e, gtin_v = block(scrollable_frame, "GTIN", self.config["gtin"], self.config["gtin_enabled"], row)
         row += 1
-        prod_e, prod_v = block("Product name", self.config["product_name"], self.config["product_enabled"], row)
+        prod_e, prod_v = block(scrollable_frame, "Product name", self.config["product_name"], self.config["product_enabled"], row)
         row += 1
-        tnved_e, tnved_v = block("TN VED", self.config["tnved"], self.config["tnved_enabled"], row)
+        tnved_e, tnved_v = block(scrollable_frame, "TN VED", self.config["tnved"], self.config["tnved_enabled"], row)
         row += 1
-        ds_e, ds_v = block("DS number", self.config["ds_number"], self.config["ds_enabled"], row)
+        ds_e, ds_v = block(scrollable_frame, "DS number", self.config["ds_number"], self.config["ds_enabled"], row)
+
+        row += 1
+        tk.Label(scrollable_frame, text="--- Proxy / VPN Settings ---", font=("Arial", 10, "bold")).grid(row=row, column=0, columnspan=3, pady=15)
+
+        row += 1
+        tk.Label(scrollable_frame, text="Proxy Enabled").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_enabled_v = tk.BooleanVar(value=self.config.get("proxy_enabled", False))
+        tk.Checkbutton(scrollable_frame, variable=proxy_enabled_v).grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(scrollable_frame, text="Proxy Type").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_type_cb = ttk.Combobox(scrollable_frame, values=["SOCKS5", "HTTP"], width=10)
+        proxy_type_cb.set(self.config.get("proxy_type", "SOCKS5"))
+        proxy_type_cb.grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(scrollable_frame, text="Host").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_host_e = tk.Entry(scrollable_frame, width=30)
+        proxy_host_e.insert(0, self.config.get("proxy_host", ""))
+        proxy_host_e.grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(scrollable_frame, text="Port").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_port_e = tk.Entry(scrollable_frame, width=10)
+        proxy_port_e.insert(0, self.config.get("proxy_port", ""))
+        proxy_port_e.grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(scrollable_frame, text="User").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_user_e = tk.Entry(scrollable_frame, width=30)
+        proxy_user_e.insert(0, self.config.get("proxy_user", ""))
+        proxy_user_e.grid(row=row, column=1, sticky="w")
+
+        row += 1
+        tk.Label(scrollable_frame, text="Password").grid(row=row, column=0, sticky="w", padx=10)
+        proxy_pass_e = tk.Entry(scrollable_frame, width=30, show="*")
+        proxy_pass_e.insert(0, self.config.get("proxy_pass", ""))
+        proxy_pass_e.grid(row=row, column=1, sticky="w")
 
         def save():
             try:
@@ -201,15 +295,23 @@ class App:
                 "tnved_enabled": tnved_v.get(),
 
                 "ds_number": ds_e.get().strip(),
-                "ds_enabled": ds_v.get()
+                "ds_enabled": ds_v.get(),
+
+                "proxy_enabled": proxy_enabled_v.get(),
+                "proxy_type": proxy_type_cb.get(),
+                "proxy_host": proxy_host_e.get().strip(),
+                "proxy_port": proxy_port_e.get().strip(),
+                "proxy_user": proxy_user_e.get().strip(),
+                "proxy_pass": proxy_pass_e.get().strip()
             })
 
             save_config(self.config)
+            apply_proxy(self.config)
             self.state.reset(val)
             messagebox.showinfo("OK", "Saved")
             win.destroy()
 
-        tk.Button(win, text="Save", command=save).grid(row=row + 1, column=1, pady=30)
+        tk.Button(scrollable_frame, text="Save", command=save).grid(row=row + 1, column=1, pady=30)
 
     # -------------------------------------------------
     # SHIFT FORM
