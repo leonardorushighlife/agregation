@@ -1,0 +1,19 @@
+{
+  "first_run": "2026-05-05",
+  "limit_enabled": true,
+  "box_size": 24,
+  "gtin": "",
+  "gtin_enabled": false,
+  "product_name": "",
+  "product_enabled": false,
+  "tnved": "",
+  "tnved_enabled": false,
+  "ds_number": "",
+  "ds_enabled": false,
+  "proxy_enabled": false,
+  "proxy_type": "SOCKS5",
+  "proxy_host": "",
+  "proxy_port": "",
+  "proxy_user": "",
+  "proxy_pass": ""
+}
