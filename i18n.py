@@ -17,9 +17,12 @@ TEXT = {
     "end_shift": "Завершить смену",
 
     "box": "Коробка",
+    "set": "Набор",
     "count": "Отсканировано",
     "scan_sscc": "Отсканируйте SSCC код транспортной упаковки",
+    "scan_set": "Отсканируйте DataMatrix код набора",
     "box_closed": "Коробка закрыта",
+    "set_closed": "Набор закрыт",
 
     "resume": "Продолжить работу?",
     "saved": "Данные сохранены",
@@ -27,6 +30,10 @@ TEXT = {
 
     "confirm_end": "Вы действительно хотите завершить смену?",
     "need_close_box": "Нельзя завершить смену: коробка не закрыта",
+    "need_close_set": "Нельзя завершить смену: набор не закрыт",
+
+    "mode_box": "Агрегация в короба (SSCC)",
+    "mode_set": "Агрегация в наборы (DM)",
 
     "error": "Ошибка",
     "error_fill": "Не все поля заполнены",
@@ -57,9 +64,12 @@ TEXT = {
     "end_shift": "结束班次",
 
     "box": "箱号",
+    "set": "集",
     "count": "已扫描",
     "scan_sscc": "请扫描箱子的 SSCC 运输码",
+    "scan_set": "请扫描套装 DataMatrix 码",
     "box_closed": "箱子已关闭",
+    "set_closed": "设置关闭",
 
     "resume": "是否继续工作？",
     "saved": "数据已保存",
@@ -67,6 +77,10 @@ TEXT = {
 
     "confirm_end": "确定要结束班次吗？",
     "need_close_box": "无法结束班次：箱子未关闭",
+    "need_close_set": "无法完成班次：设置未关闭",
+
+    "mode_box": "聚合到箱子 (SSCC)",
+    "mode_set": "聚合成套 (DM)",
 
     "error": "错误",
     "error_fill": "请填写所有字段",
@@ -97,9 +111,12 @@ TEXT = {
     "end_shift": "إنهاء الوردية",
 
     "box": "الصندوق",
+    "set": "مجموعة",
     "count": "تم المسح",
     "scan_sscc": "يرجى مسح رمز SSCC للصندوق",
+    "scan_set": "يرجى مسح رمز DataMatrix للمجموعة",
     "box_closed": "تم إغلاق الصندوق",
+    "set_closed": "تم إغلاق المجموعة",
 
     "resume": "هل تريد المتابعة؟",
     "saved": "تم حفظ البيانات",
@@ -107,6 +124,10 @@ TEXT = {
 
     "confirm_end": "هل أنت متأكد من إنهاء الوردية؟",
     "need_close_box": "لا يمكن إنهاء الوردية: الصندوق غير مغلق",
+    "need_close_set": "لا يمكن إنهاء الوردية: المجموعة غير مغلقة",
+
+    "mode_box": "التجميع في صناديق (SSCC)",
+    "mode_set": "التجميع في مجموعات (DM)",
 
     "error": "خطأ",
     "error_fill": "يرجى تعبئة جميع الحقول",
@@ -137,9 +158,12 @@ TEXT = {
     "end_shift": "Şîftê bi dawî bike",
 
     "box": "Qutî",
+    "set": "Set",
     "count": "Hat skan kirin",
     "scan_sscc": "Ji kerema xwe koda SSCC ya qutîkê skan bike",
+    "scan_set": "Ji kerema xwe koda DataMatrix ya setê skan bike",
     "box_closed": "Qutî hate girtin",
+    "set_closed": "Set hate girtin",
 
     "resume": "Tu dixwazî bidomînî?",
     "saved": "Daneyên hatin tomarkirin",
@@ -147,6 +171,10 @@ TEXT = {
 
     "confirm_end": "Tu bawer î ku tu dixwazî şîftê bi dawî bikî?",
     "need_close_box": "Nikare şîft bi dawî bibe: qutî ne girtî ye",
+    "need_close_set": "Nikare şîft bi dawî bibe: set ne girtî ye",
+
+    "mode_box": "Agregasyona qutiyan (SSCC)",
+    "mode_set": "Agregasyona setan (DM)",
 
     "error": "Çewtî",
     "error_fill": "Hemû qadên pêwîst tije bikin",

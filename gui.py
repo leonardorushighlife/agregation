@@ -27,6 +27,7 @@ def load_config():
             "first_run": datetime.now().strftime("%Y-%m-%d"),
             "limit_enabled": True,
             "box_size": 24,
+            "mode": "box",
 
             "gtin": "",
             "gtin_enabled": False,
@@ -71,7 +72,7 @@ class App:
                 save_config(self.config)
 
         self.lang = None
-        self.state = State(self.config["box_size"])
+        self.state = State(self.config["box_size"], self.config.get("mode", "box"))
         self.paused = False
 
         self.duplicates = DuplicateChecker()
@@ -147,7 +148,7 @@ class App:
     def admin_panel(self):
         win = tk.Toplevel(self.root)
         win.title("Admin panel")
-        win.geometry("520x520")
+        win.geometry("520x550")
         win.resizable(False, False)
 
         def block(title, value, enabled, row):
@@ -178,6 +179,12 @@ class App:
         row += 1
         ds_e, ds_v = block("DS number", self.config["ds_number"], self.config["ds_enabled"], row)
 
+        row += 1
+        tk.Label(win, text="Aggregation Mode").grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        mode_var = tk.StringVar(value=self.config.get("mode", "box"))
+        tk.Radiobutton(win, text="Boxes (SSCC)", variable=mode_var, value="box").grid(row=row, column=1, sticky="w")
+        tk.Radiobutton(win, text="Sets (DM)", variable=mode_var, value="set").grid(row=row, column=2, sticky="w")
+
         def save():
             try:
                 val = int(box_entry.get())
@@ -190,6 +197,7 @@ class App:
             self.config.update({
                 "box_size": val,
                 "limit_enabled": limit_var.get(),
+                "mode": mode_var.get(),
 
                 "gtin": gtin_e.get().strip(),
                 "gtin_enabled": gtin_v.get(),
@@ -205,7 +213,7 @@ class App:
             })
 
             save_config(self.config)
-            self.state.reset(val)
+            self.state.reset(val, mode_var.get())
             messagebox.showinfo("OK", "Saved")
             win.destroy()
 
@@ -300,11 +308,12 @@ class App:
     def end_shift(self):
         t = TEXT[self.lang]
         if self.state.in_box != 0:
-            messagebox.showwarning(t["error"], t["need_close_box"])
+            err_msg = t["need_close_box"] if self.state.mode == "box" else t["need_close_set"]
+            messagebox.showwarning(t["error"], err_msg)
             return
         if messagebox.askokcancel("", t["confirm_end"]):
             messagebox.showinfo("", t["sent"])
-            self.state.reset(self.config["box_size"])
+            self.state.reset(self.config["box_size"], self.config.get("mode", "box"))
             self.duplicates = DuplicateChecker()
             self.errors = ErrorLog()
             self.show_language_screen()
@@ -334,7 +343,7 @@ class App:
         try:
             parsed = parse_gs1(raw)
 
-            if self.config["gtin_enabled"]:
+            if self.config["gtin_enabled"] and self.state.mode == "box":
                 if parsed["gtin"] != self.config["gtin"]:
                     raise Exception("GTIN does not match configured product")
 
@@ -347,7 +356,10 @@ class App:
 
         if self.state.wait_sscc:
             self.state.scan_sscc()
-            self.show_last(f"SSCC: {raw}")
+            if self.state.mode == "box":
+                self.show_last(f"SSCC: {raw}")
+            else:
+                self.show_last(f"{t['set']}: {raw}")
             self.update_info(box_closed=True)
             return
 
@@ -369,11 +381,12 @@ class App:
         t = TEXT[self.lang]
 
         if box_closed:
-            txt = t["box_closed"]
+            txt = t["box_closed"] if self.state.mode == "box" else t["set_closed"]
         elif self.state.wait_sscc:
-            txt = t["scan_sscc"]
+            txt = t["scan_sscc"] if self.state.mode == "box" else t["scan_set"]
         else:
-            txt = f"{t['box']}: {self.state.box}\n{t['count']}: {self.state.in_box} / {self.state.box_size}"
+            label = t['box'] if self.state.mode == "box" else t['set']
+            txt = f"{label}: {self.state.box}\n{t['count']}: {self.state.in_box} / {self.state.box_size}"
 
         self.info.config(text=txt)
 

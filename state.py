@@ -1,12 +1,14 @@
 class State:
-    def __init__(self, box_size: int):
+    def __init__(self, box_size: int, mode: str = "box"):
         self.box_size = box_size
+        self.mode = mode  # "box" or "set"
         self.box = 1
         self.in_box = 0
         self.wait_sscc = False
 
-    def reset(self, box_size: int):
+    def reset(self, box_size: int, mode: str = "box"):
         self.box_size = box_size
+        self.mode = mode
         self.box = 1
         self.in_box = 0
         self.wait_sscc = False
