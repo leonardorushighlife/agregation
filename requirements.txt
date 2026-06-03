@@ -1,0 +1,14 @@
+requests
+openpyxl
+cryptography
+flask
+kivy
+pyserial
+python-barcode
+reportlab
+pywin32
+PySocks
+Pillow
+pynput
+opencv-python
+pylibdmtx
