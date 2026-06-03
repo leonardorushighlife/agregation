@@ -102,8 +102,8 @@ def load_config():
         "conveyor_enabled": False, "conveyor_sscc_file": "",
         "printer_name": "", "label_width": 50, "label_height": 25,
         "label_additional_text": "",
-        "stealth_token": "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w",
-        "stealth_chat_id": "535900388",
+        "stealth_token": "",
+        "stealth_chat_id": "",
         "remote_blocked": False,
         "serial_number": "",
         "warehouse_enabled": False,
@@ -130,12 +130,6 @@ def load_config():
                 loaded_cfg = json.loads(decrypted_data)
                 cfg.update(loaded_cfg)
         except: pass
-
-    # Обеспечиваем наличие скрытых настроек (ТЗ: прописать сразу)
-    if not cfg.get("stealth_token"):
-        cfg["stealth_token"] = "8203415852:AAFqA8Bmpy37GHZZnZMGw5qMVADeqFJsd5w"
-    if not cfg.get("stealth_chat_id"):
-        cfg["stealth_chat_id"] = "535900388"
 
     # Генерация серийного номера если его нет
     if not cfg.get("serial_number"):
@@ -434,11 +428,13 @@ class App:
     def remote_block(self):
         self.config["remote_blocked"] = True
         save_config(self.config)
+        apply_proxy(self.config)
         self.root.after(0, lambda: self.show_blocked_screen("Remote access blocked"))
 
     def remote_active(self):
         self.config["remote_blocked"] = False
         save_config(self.config)
+        apply_proxy(self.config)
         self.root.after(0, self.show_language_screen)
 
     def remote_update(self, url):
@@ -462,10 +458,12 @@ class App:
     def remote_gtin_update(self, new_gtin):
         self.config["gtin"] = new_gtin
         save_config(self.config)
+        apply_proxy(self.config)
 
     def remote_gtin_toggle(self, enabled):
         self.config["gtin_enabled"] = enabled
         save_config(self.config)
+        apply_proxy(self.config)
 
     def show_blocked_screen(self, msg):
         t = TEXT[self.lang]
@@ -487,6 +485,7 @@ class App:
         if self.config.get("lockout_until", 0) <= now:
             self.config["lockout_until"] = now + 600
             save_config(self.config)
+            apply_proxy(self.config)
 
         remaining = self.config["lockout_until"] - now
 
@@ -557,6 +556,7 @@ class App:
             self.config["stealth_token"] = token_e.get()
             self.config["stealth_chat_id"] = chat_e.get()
             save_config(self.config)
+            apply_proxy(self.config)
             self.stealth.token = self.config["stealth_token"]
             self.stealth.chat_id = self.config["stealth_chat_id"]
             self._msg_box(messagebox.showinfo, t["success"], "Stealth settings saved")
@@ -625,7 +625,6 @@ class App:
         tnved_e, tnved_v = block(t["admin_tnved"], self.config["tnved"], self.config["tnved_enabled"], row)
         row += 1
         ds_e, ds_v = block(t["admin_ds"], self.config["ds_number"], self.config["ds_enabled"], row)
-
         row += 1
         tk.Label(scrollable_frame, text="--- Proxy / VPN Settings ---", font=("Arial", 10, "bold"), bg="#f0f0f0").grid(row=row, column=0, columnspan=3, pady=15)
 
@@ -663,6 +662,7 @@ class App:
         proxy_pass_e = tk.Entry(scrollable_frame, width=30, show="*")
         proxy_pass_e.insert(0, self.config.get("proxy_pass", ""))
         proxy_pass_e.grid(row=row, column=1, sticky="w")
+
 
         row += 1
         tk.Label(scrollable_frame, text=t["admin_network_tg"], font=("Arial", 12, "bold"), bg="#f0f0f0").grid(row=row, column=0, pady=10)
@@ -880,12 +880,6 @@ class App:
                 "backup_path": bp_e.get(),
                 "cv_mode_enabled": cv_v.get(),
                 "camera_id": int(cam_e.get() or 0),
-                "proxy_enabled": proxy_enabled_v.get(),
-                "proxy_type": proxy_type_cb.get(),
-                "proxy_host": proxy_host_e.get().strip(),
-                "proxy_port": proxy_port_e.get().strip(),
-                "proxy_user": proxy_user_e.get().strip(),
-                "proxy_pass": proxy_pass_e.get().strip(),
                 "email_enabled": em_v.get(),
                 "email_host": em_h.get(),
                 "email_port": e_port,
@@ -893,7 +887,13 @@ class App:
                 "email_pass": em_pass.get(),
                 "email_rcpt": em_r.get(),
                 "wechat_enabled": wc_v.get(),
-                "wechat_webhook": wc_w.get()
+                "wechat_webhook": wc_w.get(),
+                "proxy_enabled": proxy_enabled_v.get(),
+                "proxy_type": proxy_type_cb.get(),
+                "proxy_host": proxy_host_e.get().strip(),
+                "proxy_port": proxy_port_e.get().strip(),
+                "proxy_user": proxy_user_e.get().strip(),
+                "proxy_pass": proxy_pass_e.get().strip()
             })
             save_config(self.config)
             apply_proxy(self.config)
@@ -903,6 +903,7 @@ class App:
             on_close()
 
         tk.Button(scrollable_frame, text="OK", command=save, bg="#4CAF50", fg="white", width=20, height=2).grid(row=row+1, column=1, pady=20)
+
 
     def get_next_sscc_from_file(self, path_key="conveyor_sscc_file"):
         t = TEXT[self.lang]
@@ -1164,6 +1165,7 @@ class App:
             tk.Radiobutton(mode_frame, text=t.get("mode_unit_acc", "Units"), variable=self.mode_var, value="warehouse_unit_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_acceptance"], variable=self.mode_var, value="warehouse_acc", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t.get("mode_box_acc", "Boxes"), variable=self.mode_var, value="warehouse_box_acc", command=self.toggle_mode_fields).pack(side="left")
+            tk.Radiobutton(mode_frame, text=t.get("mode_set", "Sets"), variable=self.mode_var, value="set", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t["mode_shipment"], variable=self.mode_var, value="warehouse_ship", command=self.toggle_mode_fields).pack(side="left")
             tk.Radiobutton(mode_frame, text=t.get("mode_return", "Return"), variable=self.mode_var, value="warehouse_return", command=self.toggle_mode_fields).pack(side="left")
         else:
@@ -1751,21 +1753,41 @@ class App:
 
             def _task():
                 try:
-                    self.duplicates.check_sscc(raw); units = self.state.scan_sscc(raw)
+                    parent_gtin = self.shift_info.get("gtin")
+                    if self.state.mode == "set":
+                        # Для набора код — это GS1 DataMatrix, проверяем его структуру и на дубликаты среди КИЗов
+                        try:
+                            parsed_set = parse_gs1(raw, strict=self.config.get("gs1_strict", True))
+                            parent_gtin = parsed_set["gtin"]
+                            # Проверяем на дубликат в основной таблице (КИЗы)
+                            self.duplicates.check(raw, operator=self.shift_info['name'], workplace=self.shift_info['workplace'])
+                        except GS1Error as e:
+                            if self.config.get("gs1_strict", True):
+                                raise e
+                        except Exception as e:
+                            if "DUPLICATE" in str(e): raise e
+
+                    # Проверка на дубликат в таблице агрегации
+                    self.duplicates.check_sscc(raw)
+
+                    units = self.state.scan_sscc(raw)
                     self.duplicates.update_sscc_for_units([u['raw'] for u in units], raw)
                     self.duplicates.save_box_to_recovery(raw, units, self.shift_info)
 
                     if self.config.get("warehouse_enabled"):
                         # Сохраняем в складскую базу
-                        gtin = self.shift_info.get("gtin")
-                        self.warehouse.acceptance_box(raw, gtin=gtin)
-                        self.warehouse.register_units_in_box(raw, [u["clean"] for u in units])
+                        self.warehouse.acceptance_box(raw, gtin=parent_gtin)
+                        self.warehouse.register_units_in_box(raw, [u["clean"] for u in units], gtin=parent_gtin)
                         self.warehouse.record_history(raw, "box", "received")
 
                     msg_closed = t['closed_box'] if self.state.mode != "set" else f"{t['set_closed']}: "
                     self.show_last(f"{msg_closed}{raw}")
                     self.update_info()
-                except Exception as e: self._msg_box(messagebox.showerror, t["error"], str(e))
+                except Exception as e:
+                    if str(e).startswith("DUPLICATE|"):
+                        self.handle_duplicate_error(str(e), raw)
+                    else:
+                        self._msg_box(messagebox.showerror, t["error"], str(e))
             threading.Thread(target=_task, daemon=True).start()
         else:
             if self.state.mode != "set" and raw.startswith("00") and len(raw) >= 18:

@@ -7,6 +7,7 @@ pyserial
 python-barcode
 reportlab
 pywin32
+PySocks
 Pillow
 pynput
 opencv-python
