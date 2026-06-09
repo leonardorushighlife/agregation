@@ -67,17 +67,16 @@ class VirtualAggregationApp:
 
     def read_codes(self, filepath):
         codes = []
-        for encoding in ['utf-8-sig', 'utf-8', 'cp1251']:
+        for encoding in ['utf-8-sig', 'utf-8', 'cp1251', 'utf-16']:
             try:
                 with open(filepath, 'r', encoding=encoding) as f:
                     for line in f:
                         code = line.strip()
                         if code:
                             codes.append(code)
-                return codes
-            except (UnicodeDecodeError, Exception):
-                continue
-        return []
+                if codes: return codes
+            except: continue
+        return codes
 
     def process(self):
         if not self.parent_file:
@@ -99,7 +98,7 @@ class VirtualAggregationApp:
         # Загрузка данных
         parent_codes = self.read_codes(self.parent_file)
         if not parent_codes:
-            messagebox.showerror("Ошибка", "Не удалось прочитать коды из файла родителей")
+            messagebox.showerror("Ошибка", f"Не удалось прочитать коды из файла родителей")
             return
 
         child_files_data = []
@@ -113,7 +112,7 @@ class VirtualAggregationApp:
             return
 
         # Расчет реального количества наборов
-        # Для каждого набора нужно 'count_per_file' кодов из КАЖДОГО файла детей
+        # Для каждого набора нужно 'count_per_file' кодов из КАЖДОГО выбранного файла детей
         try:
             min_possible_from_children = min(len(c_list) // count_per_file for c_list in child_files_data)
             actual_sets = min(len(parent_codes), min_possible_from_children)
@@ -140,7 +139,7 @@ class VirtualAggregationApp:
             ws = wb.active
             ws.title = "Агрегация"
 
-            # Заголовки согласно примеру
+            # Заголовки (согласно примеру агригация пример .xlsx)
             ws.append(["AGGREGATE", "ITEM"])
             ws['A1'].font = Font(bold=True)
             ws['B1'].font = Font(bold=True)
@@ -149,20 +148,20 @@ class VirtualAggregationApp:
             for i in range(actual_sets):
                 p_code = parent_codes[i]
 
-                # Собираем вложения из всех файлов
+                # Добавляем вложения из КАЖДОГО файла
                 for codes_list in child_files_data:
                     start_idx = i * count_per_file
                     for k in range(count_per_file):
-                        # Проверка индекса на всякий случай
-                        if (start_idx + k) < len(codes_list):
-                            c_code = codes_list[start_idx + k]
-                            ws.cell(row=row_idx, column=1, value=p_code)
-                            ws.cell(row=row_idx, column=2, value=c_code)
-                            row_idx += 1
+                        c_code = codes_list[start_idx + k]
+                        ws.cell(row=row_idx, column=1, value=p_code)
+                        ws.cell(row=row_idx, column=2, value=c_code)
+                        row_idx += 1
 
             wb.save(save_path)
             messagebox.showinfo("Успех", f"Файл успешно сохранен:\n{save_path}\nСоздано наборов: {actual_sets}")
 
+        except PermissionError:
+            messagebox.showerror("Ошибка", "Не удалось сохранить файл. Возможно, он открыт в Excel.")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить файл:\n{e}")
 
