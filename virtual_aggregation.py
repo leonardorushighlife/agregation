@@ -8,7 +8,7 @@ class VirtualAggregationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Виртуальная агрегация (Excel)")
-        self.root.geometry("500x400")
+        self.root.geometry("500x500")
         self.root.resizable(False, False)
 
         self.parent_file = ""
@@ -24,8 +24,13 @@ class VirtualAggregationApp:
         self.lbl_parent = tk.Label(frame, text="Файл не выбран", fg="gray", wraplength=450)
         self.lbl_parent.pack(anchor="w", pady=(0, 15))
 
-        tk.Label(frame, text="2. Выберите файлы с кодами вложений (дети):", font=("Arial", 10, "bold")).pack(anchor="w")
-        tk.Label(frame, text="(из каждого файла будет взято по 1 коду для каждого набора)", font=("Arial", 8), fg="blue").pack(anchor="w")
+        tk.Label(frame, text="2. Количество вложений из КАЖДОГО файла:", font=("Arial", 10, "bold")).pack(anchor="w")
+        self.ent_count = tk.Entry(frame)
+        self.ent_count.insert(0, "1")
+        self.ent_count.pack(fill="x", pady=(5, 15))
+
+        tk.Label(frame, text="3. Выберите файлы с кодами вложений (дети):", font=("Arial", 10, "bold")).pack(anchor="w")
+        tk.Label(frame, text="(будет взято указанное кол-во кодов из каждого файла)", font=("Arial", 8), fg="blue").pack(anchor="w")
         self.btn_children = tk.Button(frame, text="Выбрать файлы", command=self.select_children)
         self.btn_children.pack(fill="x", pady=(5, 5))
         self.lbl_children = tk.Label(frame, text="Файлы не выбраны", fg="gray", wraplength=450)
@@ -75,6 +80,15 @@ class VirtualAggregationApp:
         if not self.parent_file:
             messagebox.showerror("Ошибка", "Выберите файл с кодами наборов")
             return
+
+        try:
+            count_per_file = int(self.ent_count.get())
+            if count_per_file <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите корректное число вложений (больше 0)")
+            return
+
         if not self.child_files:
             messagebox.showerror("Ошибка", "Выберите файлы с кодами вложений")
             return
@@ -98,12 +112,13 @@ class VirtualAggregationApp:
             messagebox.showerror("Ошибка", "Нет данных в файлах вложений")
             return
 
-        # Calculate how many sets we can form
-        min_children = min([len(codes) for codes in child_files_data])
-        actual_sets = min(len(parent_codes), min_children)
+        # Calculate how many sets we can form safely
+        # Each set needs 'count_per_file' codes from EVERY child file
+        possible_from_children = min(len(codes) // count_per_file for codes in child_files_data)
+        actual_sets = min(len(parent_codes), possible_from_children)
 
         if actual_sets == 0:
-            messagebox.showerror("Ошибка", "Недостаточно данных для создания хотя бы одного набора")
+            messagebox.showerror("Ошибка", "Недостаточно данных для создания хотя бы одного набора.\nПроверьте количество кодов в файлах.")
             return
 
         # Create folder
@@ -116,24 +131,23 @@ class VirtualAggregationApp:
             os.makedirs(folder_name, exist_ok=True)
             wb = openpyxl.Workbook()
             ws = wb.active
-            # Headers as per screenshot
+            # Headers: Название набора, Код идентификации набора, Наименование товара, Код маркировки
             headers = ["Название набора", "Код идентификации набора", "Наименование товара", "Код маркировки"]
             ws.append(headers)
 
-            processed_count = 0
             for i in range(actual_sets):
                 p_code = parent_codes[i]
                 for codes_list in child_files_data:
-                    c_code = codes_list[i]
-                    # Columns: 1-Empty, 2-Parent, 3-Empty, 4-Child
-                    ws.append(["", p_code, "", c_code])
-                processed_count += 1
+                    for k in range(count_per_file):
+                        c_code = codes_list[i * count_per_file + k]
+                        # Columns: 1-Empty, 2-Parent, 3-Empty, 4-Child
+                        ws.append(["", p_code, "", c_code])
 
             wb.save(output_path)
 
             messagebox.showinfo("Готово",
                 f"Агрегация завершена!\n\n"
-                f"Обработано наборов: {processed_count}\n"
+                f"Обработано наборов: {actual_sets}\n"
                 f"Создан файл: {output_path}"
             )
         except Exception as e:
