@@ -2,39 +2,13 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from datetime import datetime
-import re
-
-def sanitize_filename(name):
-    # Remove characters that are illegal in Windows filenames
-    return re.sub(r'[\\/*?:"<>|]', "_", name)
-
-def aggregate_codes(parent_codes, child_codes, count_per_set, folder_name):
-    actual_sets = min(len(parent_codes), len(child_codes) // count_per_set)
-    processed_count = 0
-
-    for i in range(actual_sets):
-        p_code = parent_codes[i]
-        start_idx = i * count_per_set
-        end_idx = start_idx + count_per_set
-
-        current_children = child_codes[start_idx:end_idx]
-
-        safe_p_code = sanitize_filename(p_code)
-        filename = f"Набор_{i+1}_{safe_p_code[:30]}.txt"
-        filepath = os.path.join(folder_name, filename)
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(p_code + "\n")
-            for c_code in current_children:
-                f.write(c_code + "\n")
-        processed_count += 1
-    return processed_count
+import openpyxl
 
 class VirtualAggregationApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Виртуальная агрегация")
-        self.root.geometry("500x450")
+        self.root.title("Виртуальная агрегация (Excel)")
+        self.root.geometry("500x400")
         self.root.resizable(False, False)
 
         self.parent_file = ""
@@ -51,19 +25,15 @@ class VirtualAggregationApp:
         self.lbl_parent.pack(anchor="w", pady=(0, 15))
 
         tk.Label(frame, text="2. Выберите файлы с кодами вложений (дети):", font=("Arial", 10, "bold")).pack(anchor="w")
+        tk.Label(frame, text="(из каждого файла будет взято по 1 коду для каждого набора)", font=("Arial", 8), fg="blue").pack(anchor="w")
         self.btn_children = tk.Button(frame, text="Выбрать файлы", command=self.select_children)
         self.btn_children.pack(fill="x", pady=(5, 5))
         self.lbl_children = tk.Label(frame, text="Файлы не выбраны", fg="gray", wraplength=450)
-        self.lbl_children.pack(anchor="w", pady=(0, 15))
-
-        tk.Label(frame, text="3. Количество вложений в один набор:", font=("Arial", 10, "bold")).pack(anchor="w")
-        self.ent_count = tk.Entry(frame, font=("Arial", 12))
-        self.ent_count.insert(0, "1")
-        self.ent_count.pack(fill="x", pady=(5, 15))
+        self.lbl_children.pack(anchor="w", pady=(0, 20))
 
         self.btn_process = tk.Button(
             frame,
-            text="Запустить агрегацию",
+            text="Создать Excel файл",
             bg="#4CAF50",
             fg="white",
             font=("Arial", 12, "bold"),
@@ -109,58 +79,65 @@ class VirtualAggregationApp:
             messagebox.showerror("Ошибка", "Выберите файлы с кодами вложений")
             return
 
-        try:
-            count_per_set = int(self.ent_count.get())
-            if count_per_set <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректное число вложений (целое число больше 0)")
-            return
-
-        # Load codes
+        # Load parent codes
         parent_codes = self.read_codes(self.parent_file)
-        child_codes = []
-        for cf in self.child_files:
-            child_codes.extend(self.read_codes(cf))
-
         if not parent_codes:
-            messagebox.showerror("Ошибка", "Файл наборов пуст или не содержит кодов")
-            return
-        if not child_codes:
-            messagebox.showerror("Ошибка", "Файлы вложений пусты или не содержат кодов")
+            messagebox.showerror("Ошибка", "Файл наборов пуст")
             return
 
-        total_possible_sets = len(child_codes) // count_per_set
-        actual_sets = min(len(parent_codes), total_possible_sets)
+        # Load child codes from each file
+        child_files_data = []
+        for cf in self.child_files:
+            codes = self.read_codes(cf)
+            if not codes:
+                messagebox.showwarning("Внимание", f"Файл {os.path.basename(cf)} пуст и будет проигнорирован")
+                continue
+            child_files_data.append(codes)
 
-        if len(parent_codes) > total_possible_sets:
-            msg = f"Кодов вложений ({len(child_codes)}) хватит только на {total_possible_sets} наборов.\n" \
-                  f"У вас {len(parent_codes)} кодов наборов.\n\nПродолжить агрегацию для {total_possible_sets} наборов?"
-            if not messagebox.askyesno("Внимание", msg):
-                return
+        if not child_files_data:
+            messagebox.showerror("Ошибка", "Нет данных в файлах вложений")
+            return
+
+        # Calculate how many sets we can form
+        min_children = min([len(codes) for codes in child_files_data])
+        actual_sets = min(len(parent_codes), min_children)
+
+        if actual_sets == 0:
+            messagebox.showerror("Ошибка", "Недостаточно данных для создания хотя бы одного набора")
+            return
 
         # Create folder
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         folder_name = f"агрегация_{timestamp}"
+        output_filename = f"агрегация_{timestamp}.xlsx"
+        output_path = os.path.join(folder_name, output_filename)
+
         try:
             os.makedirs(folder_name, exist_ok=True)
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать папку:\n{e}")
-            return
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            # Headers as per screenshot
+            headers = ["Название набора", "Код идентификации набора", "Наименование товара", "Код маркировки"]
+            ws.append(headers)
 
-        # Distribute
-        try:
-            processed_count = aggregate_codes(parent_codes, child_codes, count_per_set, folder_name)
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Произошла ошибка при выполнении агрегации:\n{e}")
-            return
+            processed_count = 0
+            for i in range(actual_sets):
+                p_code = parent_codes[i]
+                for codes_list in child_files_data:
+                    c_code = codes_list[i]
+                    # Columns: 1-Empty, 2-Parent, 3-Empty, 4-Child
+                    ws.append(["", p_code, "", c_code])
+                processed_count += 1
 
-        messagebox.showinfo("Готово",
-            f"Агрегация завершена!\n\n"
-            f"Создано наборов: {processed_count}\n"
-            f"Использовано вложений: {processed_count * count_per_set}\n"
-            f"Результаты в папке: {folder_name}"
-        )
+            wb.save(output_path)
+
+            messagebox.showinfo("Готово",
+                f"Агрегация завершена!\n\n"
+                f"Обработано наборов: {processed_count}\n"
+                f"Создан файл: {output_path}"
+            )
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать Excel файл:\n{e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
