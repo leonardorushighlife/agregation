@@ -3,7 +3,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import openpyxl
 from openpyxl.styles import Font
-import re
 
 class VirtualAggregationApp:
     def __init__(self, root):
@@ -100,7 +99,7 @@ class VirtualAggregationApp:
         # Загрузка данных
         parent_codes = self.read_codes(self.parent_file)
         if not parent_codes:
-            messagebox.showerror("Ошибка", f"Не удалось прочитать коды из файла родителей")
+            messagebox.showerror("Ошибка", "Не удалось прочитать коды из файла родителей")
             return
 
         child_files_data = []
@@ -114,9 +113,12 @@ class VirtualAggregationApp:
             return
 
         # Расчет реального количества наборов
-        # Для каждого набора нужно 'count_per_file' кодов из каждого выбранного файла детей
-        min_possible_from_children = min(len(c_list) // count_per_file for c_list in child_files_data)
-        actual_sets = min(len(parent_codes), min_possible_from_children)
+        # Для каждого набора нужно 'count_per_file' кодов из КАЖДОГО файла детей
+        try:
+            min_possible_from_children = min(len(c_list) // count_per_file for c_list in child_files_data)
+            actual_sets = min(len(parent_codes), min_possible_from_children)
+        except ZeroDivisionError:
+            actual_sets = 0
 
         if actual_sets == 0:
             messagebox.showerror("Ошибка", "Недостаточно данных для создания хотя бы одного набора")
@@ -138,8 +140,8 @@ class VirtualAggregationApp:
             ws = wb.active
             ws.title = "Агрегация"
 
-            # Заголовки
-            ws.append(["Код родителя", "Код вложения"])
+            # Заголовки согласно примеру
+            ws.append(["AGGREGATE", "ITEM"])
             ws['A1'].font = Font(bold=True)
             ws['B1'].font = Font(bold=True)
 
@@ -147,14 +149,16 @@ class VirtualAggregationApp:
             for i in range(actual_sets):
                 p_code = parent_codes[i]
 
-                # Добавляем родителя и его вложения
+                # Собираем вложения из всех файлов
                 for codes_list in child_files_data:
                     start_idx = i * count_per_file
                     for k in range(count_per_file):
-                        c_code = codes_list[start_idx + k]
-                        ws.cell(row=row_idx, column=1, value=p_code)
-                        ws.cell(row=row_idx, column=2, value=c_code)
-                        row_idx += 1
+                        # Проверка индекса на всякий случай
+                        if (start_idx + k) < len(codes_list):
+                            c_code = codes_list[start_idx + k]
+                            ws.cell(row=row_idx, column=1, value=p_code)
+                            ws.cell(row=row_idx, column=2, value=c_code)
+                            row_idx += 1
 
             wb.save(save_path)
             messagebox.showinfo("Успех", f"Файл успешно сохранен:\n{save_path}\nСоздано наборов: {actual_sets}")
