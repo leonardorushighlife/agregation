@@ -1,0 +1,9 @@
+Инструкция по сборке скрипта виртуальной агрегации в EXE:
+
+1. Установите PyInstaller (если еще не установлен):
+   pip install pyinstaller
+
+2. Выполните команду для сборки в один файл без консоли:
+   pyinstaller --noconsole --onefile virtual_aggregation.py
+
+3. После завершения сборки готовый EXE файл появится в папке "dist".
