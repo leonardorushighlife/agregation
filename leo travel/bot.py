@@ -40,7 +40,8 @@ CONFIG_FILE = "bot_config.txt"
 
 # --- БД ПОЛЬЗОВАТЕЛЕЙ И ПОДПИСОК (хранится в оперативной памяти) ---
 ALL_USERS = set()               # Все пользователи, запустившие бота
-HOT_TOUR_SUBSCRIBERS = set()    # Пользователи, запросившие персональный автопоиск горящих туров каждые 30 минут
+# Храним информацию о подписках в формате {user_id: depart_city} для персональных рассылок
+HOT_TOUR_SUBSCRIBERS = {}
 
 
 def save_channel_id(channel_id):
@@ -108,6 +109,11 @@ class TourSearchForm(StatesGroup):
     waiting_for_food = State()
 
 
+# --- FSM для горящих туров ---
+class HotTourForm(StatesGroup):
+    waiting_for_city = State()
+
+
 # --- КНОПКИ ГЛАВНОГО МЕНЮ ---
 def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(
@@ -139,21 +145,15 @@ def generate_referral_link(hotel_id, partner_id=PARTNER_ID, operator_name=None):
 async def safe_send_tour(target, photo_url, text, parse_mode="Markdown", bot=None, chat_id=None):
     """
     Безопасно отправляет карточку тура с фотографией.
-    Если сервера Telegram не могут скачать картинку из Unsplash (Bad Request: failed to get HTTP URL content),
-    метод автоматически переключается на текстовую отправку без потери информации!
-
-    :param target: Объект сообщения (types.Message) или None, если отправка идет по id
     """
     try:
         if target:
-            # Отправка в ответ на сообщение пользователя
             await target.answer_photo(
                 photo=photo_url,
                 caption=text,
                 parse_mode=parse_mode
             )
         elif bot and chat_id:
-            # Отправка по крону конкретному пользователю
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_url,
@@ -164,7 +164,6 @@ async def safe_send_tour(target, photo_url, text, parse_mode="Markdown", bot=Non
     except Exception as e:
         logger.warning(f"Сервер Telegram не смог загрузить фото по URL ({e}). Отправляем резервную текстовую версию...")
         try:
-            # Резервная отправка чистым текстом
             if target:
                 await target.answer(
                     text,
@@ -465,9 +464,39 @@ async def cmd_set_channel(message: types.Message):
 # --- ХЕНДЛЕР ДЛЯ "🔥 ГОРЯЧИЕ ТУРЫ" ---
 @router.message(lambda message: message.text == "🔥 Горячие туры")
 @router.message(Command("hot"))
-async def cmd_hot_tours(message: types.Message):
+async def cmd_hot_tours(message: types.Message, state: FSMContext):
     ALL_USERS.add(message.chat.id)
-    HOT_TOUR_SUBSCRIBERS.add(message.chat.id)
+    await state.clear()
+
+    # Сначала спрашиваем город вылета
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Москва"), types.KeyboardButton(text="Санкт-Петербург")],
+            [types.KeyboardButton(text="Минск")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("✈️ Выберите ваш город вылета для поиска горящих туров:", reply_markup=keyboard)
+    await state.set_state(HotTourForm.waiting_for_city)
+
+
+@router.message(HotTourForm.waiting_for_city)
+async def process_hot_city(message: types.Message, state: FSMContext):
+    city_text = message.text.strip()
+    depart_city = "Moscow"
+    city_name_ru = "Москва"
+    if city_text == "Санкт-Петербург":
+        depart_city = "Saint-Petersburg"
+        city_name_ru = "Санкт-Петербург"
+    elif city_text == "Минск":
+        depart_city = "Minsk"
+        city_name_ru = "Минск"
+
+    await state.clear()
+
+    # Сохраняем подписку пользователя с привязкой к конкретному городу вылета
+    HOT_TOUR_SUBSCRIBERS[message.chat.id] = depart_city
 
     countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы", "Россия (Сочи)"]
     country_choice = random.choice(countries)
@@ -477,25 +506,26 @@ async def cmd_hot_tours(message: types.Message):
     hot_date = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
 
     await message.answer(
-        "🔥 *Вы успешно подписались на персональные горящие туры!*\n\n"
-        "Каждые 30 минут я буду автоматически искать новые горящие туры в течение недели (вылет за 2–5 дней) и отправлять их *лично вам*! 👇\n"
-        "А вот первое предложение на сегодня:",
-        parse_mode="Markdown"
+        f"🔥 *Вы успешно подписались на персональные горящие туры с вылетом из г. {city_name_ru}!*\n\n"
+        f"Каждые 30 минут я буду автоматически искать новые горящие предложения в течение недели (вылет за 2–5 дней) и отправлять их *лично вам*! 👇\n"
+        f"А вот первое предложение на сегодня:",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
     )
 
-    waiting_msg = await message.answer(f"🔎 *Ищем горящий тур напрямую от туроператоров...*", parse_mode="Markdown")
+    waiting_msg = await message.answer(f"🔎 *Ищем горящий тур напрямую от туроператоров с вылетом из г. {city_name_ru}...*", parse_mode="Markdown")
 
     try:
         tours = await fetch_cheapest_tours(
             country=country_choice,
             date_from=hot_date,
             stars=random.choice([4, 5]),
-            depart_city=random.choice(["Moscow", "Saint-Petersburg", "Minsk"])
+            depart_city=depart_city
         )
         await waiting_msg.delete()
 
         if not tours:
-            await message.answer("😔 Сейчас горящих туров не найдено. Я продолжу поиск в фоновом режиме!")
+            await message.answer("😔 Сейчас горящих туров не найдено. Я продолжу поиск в фоновом режиме каждые 30 минут!")
             return
 
         t = tours[0]
@@ -516,7 +546,7 @@ async def cmd_hot_tours(message: types.Message):
             f"🏖 *Направление:* {country_choice.upper()}\n"
             f"🏨 *Отель:* {t['hotel']} {t['stars']}⭐\n"
             f"📍 *Курорт:* {t['resort']}\n"
-            f"✈️ *Вылет:* {t['date']} (в течение 5 дней!)\n"
+            f"✈ *Вылет из:* {city_name_ru} ({t['date']}, в течение 5 дней!)\n"
             f"🏢 *Прямой Туроператор:* *{t['operator']}* (без агентств и комиссий!)\n"
             f"🍽 *Питание:* Все включено (All Inclusive)\n"
             f"🌙 *Продолжительность:* {t['nights']} ночей\n"
@@ -525,7 +555,6 @@ async def cmd_hot_tours(message: types.Message):
             f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
         )
 
-        # Используем безопасный отправитель!
         await safe_send_tour(target=message, photo_url=photo_url, text=tour_text)
 
     except Exception as e:
@@ -772,7 +801,6 @@ async def process_final_search(message: types.Message, state: FSMContext):
             )
 
             photo_url = DESTINATION_PHOTOS.get(country, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
-            # Используем безопасный отправитель!
             await safe_send_tour(target=message, photo_url=photo_url, text=tour_text)
 
     except Exception as e:
@@ -782,19 +810,25 @@ async def process_final_search(message: types.Message, state: FSMContext):
 
 # --- ФОНОВЫЕ ПОТОКИ/ЗАДАЧИ ---
 
-# 1. Персональная отправка горящих туров подписчикам каждые 30 минут
+# 1. Персональная отправка горящих туров подписчикам каждые 30 минут с учетом выбранного города вылета
 async def personal_hot_tours_subscriber_loop(bot: Bot):
     while True:
         await asyncio.sleep(1800) # Интервал 30 минут
         if not HOT_TOUR_SUBSCRIBERS:
             continue
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Фоновый поиск персональных горящих туров для {len(HOT_TOUR_SUBSCRIBERS)} подписчиков...", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Фоновый поиск персональных горящих туров для {len(HOT_TOUR_SUBSCRIBERS)} подписчиков с учетом города вылета...", flush=True)
 
         countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы", "Россия (Сочи)"]
 
-        for user_id in list(HOT_TOUR_SUBSCRIBERS):
+        for user_id, depart_city in list(HOT_TOUR_SUBSCRIBERS.items()):
             try:
+                city_name_ru = "Москва"
+                if depart_city == "Saint-Petersburg":
+                    city_name_ru = "Санкт-Петербург"
+                elif depart_city == "Minsk":
+                    city_name_ru = "Минск"
+
                 country_choice = random.choice(countries)
                 random_days_offset = random.randint(2, 5)
                 hot_date = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
@@ -803,7 +837,7 @@ async def personal_hot_tours_subscriber_loop(bot: Bot):
                     country=country_choice,
                     date_from=hot_date,
                     stars=random.choice([4, 5]),
-                    depart_city=random.choice(["Moscow", "Saint-Petersburg", "Minsk"])
+                    depart_city=depart_city
                 )
 
                 if tours:
@@ -826,7 +860,7 @@ async def personal_hot_tours_subscriber_loop(bot: Bot):
                         f"🏖 *Направление:* {country_choice.upper()}\n"
                         f"🏨 *Отель:* {t['hotel']} {t['stars']}⭐\n"
                         f"📍 *Курорт:* {t['resort']}\n"
-                        f"✈️ *Вылет:* {t['date']} (в течение 5 дней!)\n"
+                        f"✈ *Вылет из:* {city_name_ru} ({t['date']}, в течение 5 дней!)\n"
                         f"🏢 *Прямой Туроператор:* *{t['operator']}*\n"
                         f"🍽 *Питание:* Все включено\n"
                         f"🌙 *Продолжительность:* {t['nights']} ночей\n"
@@ -835,9 +869,8 @@ async def personal_hot_tours_subscriber_loop(bot: Bot):
                         f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
                     )
 
-                    # Безопасно отправляем с фото или без!
                     await safe_send_tour(target=None, photo_url=photo_url, text=tour_text, bot=bot, chat_id=user_id)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Успешно отправлен персональный горящий тур пользователю {user_id}", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Успешно отправлен персональный горящий тур вылетом из {city_name_ru} пользователю {user_id}", flush=True)
             except Exception as e:
                 logger.error(f"Не удалось отправить персональный тур пользователю {user_id}: {e}")
 
