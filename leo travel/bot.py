@@ -85,10 +85,25 @@ TOUR_OPERATORS = {
 # --- FSM для пользовательского поиска ---
 class TourSearchForm(StatesGroup):
     waiting_for_country = State()
+    waiting_for_city = State()
     waiting_for_date = State()
     waiting_for_nights = State()
-    waiting_for_people = State()
+    waiting_for_adults = State()
+    waiting_for_children = State()
     waiting_for_stars = State()
+    waiting_for_food = State()
+
+
+# --- КНОПКИ ГЛАВНОГО МЕНЮ ---
+def get_main_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="🔍 Поиск тура"), types.KeyboardButton(text="🔥 Горячие туры")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+    return keyboard
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -135,7 +150,7 @@ async def get_gigachat_token():
     return None
 
 
-async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operator_name=None):
+async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operator_name=None, food="Не указано"):
     token = await get_gigachat_token()
     operator_info = f"Туроператор: {operator_name}" if operator_name else ""
 
@@ -149,9 +164,10 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
             f"Проанализируй выгодность следующего тура на русском языке:\n"
             f"Отель: {hotel} (Звездность: {stars}*)\n"
             f"Курорт: {resort}\n"
+            f"Питание: {food}\n"
             f"Продолжительность: {nights} ночей\n"
             f"{operator_info}\n"
-            f"Полная стоимость тура на двоих: {price} рублей.\n\n"
+            f"Полная стоимость тура: {price} рублей.\n\n"
             f"Напиши привлекательное, экспертное и лаконичное резюме (до 3-4 предложений) "
             f"для туристов, почему этот тур действительно выгоден, выдели его ключевые плюсы и "
             f"заверши призывом к быстрому бронированию."
@@ -185,7 +201,8 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
 
     analysis = (
         f"🤖 *Анализ Leo-AI:* Предложение{op_text} — это {rating_words} для отдыха! "
-        f"Стоимость одних суток составляет всего около {price_per_night:,} руб. на двоих, что значительно ниже "
+        f"Тип питания: {food}. "
+        f"Стоимость одних суток составляет всего около {price_per_night:,} руб., что значительно ниже "
         f"среднерыночной цены для курорта {resort.split(',')[-1].strip()}. "
         f"Учитывая звездность {stars}*, данный тур предлагает великолепное соотношение цены и качества. "
         f"Рекомендуем бронировать прямо сейчас, пока предложение актуально!"
@@ -194,7 +211,8 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
 
 
 # --- УНИВЕРСАЛЬНЫЙ ПОИСК ТУРОВ (РФ И БЕЛАРУСЬ) ---
-async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2, stars=3, depart_city="Moscow"):
+async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2, children=0, stars=3, depart_city="Moscow", food="Все включено"):
+    people_total = adults + children
     if depart_city == "Minsk":
         logger.info("Выполняется поиск по базе туроператоров Беларуси (Минск)...")
         await asyncio.sleep(1)
@@ -204,26 +222,28 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
             {
                 "resort": f"{dest_country}, Солнечный Берег",
                 "hotel": f"Lion Hotel {stars}*",
-                "price": 49000,
-                "price_double": 98000,
+                "price": 49000 * adults + 15000 * children,
+                "price_double": (49000 * adults + 15000 * children),
                 "hotel_id": "801234",
                 "nights": nights,
-                "people": people,
+                "people": people_total,
                 "stars": stars,
                 "depart_from": "Минск",
-                "operator": "Rosting (Ростинг)"
+                "operator": "Rosting (Ростинг)",
+                "food": food
             },
             {
                 "resort": f"{dest_country}, Золотые Пески",
                 "hotel": f"Astoria Hotel {stars + 1 if stars < 5 else 5}*",
-                "price": 54000,
-                "price_double": 108000,
+                "price": 54000 * adults + 18000 * children,
+                "price_double": (54000 * adults + 18000 * children),
                 "hotel_id": "805678",
                 "nights": nights,
-                "people": people,
+                "people": people_total,
                 "stars": stars + 1 if stars < 5 else 5,
                 "depart_from": "Минск",
-                "operator": "AeroBelService (АэроБелСервис)"
+                "operator": "AeroBelService (АэроБелСервис)",
+                "food": food
             }
         ]
         return tours
@@ -239,38 +259,41 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
             {
                 "resort": f"{dest_country}, Кемер",
                 "hotel": f"Armas Beach {stars}*",
-                "price": 45000,
-                "price_double": 90000,
+                "price": 45000 * adults + 12000 * children,
+                "price_double": (45000 * adults + 12000 * children),
                 "hotel_id": "9012345",
                 "nights": nights,
-                "people": people,
+                "people": people_total,
                 "stars": stars,
                 "depart_from": depart_from,
-                "operator": "Anex Tour"
+                "operator": "Anex Tour",
+                "food": food
             },
             {
                 "resort": f"{dest_country}, Аланья",
                 "hotel": f"Kleopatra Micador {stars}*",
-                "price": 41200,
-                "price_double": 82400,
+                "price": 41200 * adults + 10000 * children,
+                "price_double": (41200 * adults + 10000 * children),
                 "hotel_id": "9054321",
                 "nights": nights,
-                "people": people,
+                "people": people_total,
                 "stars": stars,
                 "depart_from": depart_from,
-                "operator": "Coral Travel"
+                "operator": "Coral Travel",
+                "food": food
             },
             {
                 "resort": f"{dest_country}, Сиде",
                 "hotel": f"Sunstar Resort Hotel {stars + 1 if stars < 5 else 5}*",
-                "price": 52000,
-                "price_double": 104000,
+                "price": 52000 * adults + 15000 * children,
+                "price_double": (52000 * adults + 15000 * children),
                 "hotel_id": "9087654",
                 "nights": nights,
-                "people": people,
+                "people": people_total,
                 "stars": stars + 1 if stars < 5 else 5,
                 "depart_from": depart_from,
-                "operator": "Pegas Touristik"
+                "operator": "Pegas Touristik",
+                "food": food
             }
         ]
         return tours
@@ -291,7 +314,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
         "from_city_id": from_city_id,
         "to_country_name": country or "Turkey",
         "nights": nights,
-        "adults": people,
+        "adults": adults,
+        "children": children,
         "stars_from": stars,
         "stars_to": 5,
         "start_date": date_from or (datetime.now() + timedelta(days=5)).strftime("%d.%m.%Y")
@@ -310,20 +334,21 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                             results.append({
                                 "resort": t.get("resort_name", "Курорт"),
                                 "hotel": t.get("hotel_name", "Отель"),
-                                "price": int(t.get("price", 0) / people),
+                                "price": int(t.get("price", 0) / people_total),
                                 "price_double": int(t.get("price", 0)),
                                 "hotel_id": t.get("hotel_id", "0"),
                                 "nights": nights,
-                                "people": people,
+                                "people": people_total,
                                 "stars": stars,
                                 "depart_from": "Москва" if depart_city == "Moscow" else "Санкт-Петербург",
-                                "operator": operator_name
+                                "operator": operator_name,
+                                "food": food
                             })
                         return results
     except Exception as e:
         logger.error(f"Ошибка при запросе к API Level.Travel: {e}")
 
-    return await fetch_cheapest_tours(country, date_from, nights, people, stars, depart_city)
+    return await fetch_cheapest_tours(country, date_from, nights, adults, children, stars, depart_city, food)
 
 
 # --- ХЕНДЛЕРЫ БОТА ---
@@ -335,12 +360,9 @@ async def cmd_start(message: types.Message):
         "Мы подключили напрямую и через агрегаторы следующие системы:\n"
         "🇷🇺 *Россия:* Anex Tour, Coral Travel, Pegas Touristik, Библио-Глобус, Tez Tour, Fun&Sun, Интурист\n"
         "🇧🇾 *Беларусь:* Ростинг, АэроБелСервис, СофтТур, Интерсити (вылеты из Минска и городов РБ!)\n\n"
-        "🎈 *Доступные команды:*\n"
-        "🔍 /find — Начать индивидуальный поиск тура\n"
-        "⚙️ /set_channel — Привязать Telegram-канал для автопостинга (Доступно Администратору)\n\n"
-        "Бот автоматически ищет самые горячие предложения каждые 60 минут, анализирует их с помощью искусственного интеллекта GigaChat и отправляет в ваш канал!"
+        "🎈 Воспользуйтесь кнопками меню для быстрого поиска или просмотра горящих туров 👇"
     )
-    await message.answer(welcome_text, parse_mode="Markdown")
+    await message.answer(welcome_text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 @router.message(Command("set_channel"))
@@ -363,12 +385,58 @@ async def cmd_set_channel(message: types.Message):
     await message.answer(f"✅ Канал для репоста туров успешно установлен: *{channel_id}*", parse_mode="Markdown")
 
 
-# --- ХЕНДЛЕРЫ ИНДИВИДУАЛЬНОГО ПОИСКА (/find) ---
+# --- ХЕНДЛЕР ДЛЯ "ГОРЯЧИЕ ТУРЫ" ---
+@router.message(lambda message: message.text == "🔥 Горячие туры")
+@router.message(Command("hot"))
+async def cmd_hot_tours(message: types.Message):
+    waiting_msg = await message.answer("🔥 *Ищем самые сочные горящие предложения...*", parse_mode="Markdown")
+    try:
+        tours = await fetch_cheapest_tours(country="Турция", stars=4, depart_city="Moscow")
+        await waiting_msg.delete()
 
+        if not tours:
+            await message.answer("😔 Сейчас горящих туров не найдено. Попробуйте выполнить ручной поиск.")
+            return
+
+        for t in tours[:2]:
+            ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
+            ai_analysis = await analyze_tour_with_gigachat(
+                hotel=t["hotel"],
+                resort=t["resort"],
+                price=t["price_double"],
+                nights=t["nights"],
+                stars=t["stars"],
+                operator_name=t["operator"],
+                food="Все включено"
+            )
+            tour_text = (
+                f"🔥 *ГОРЯЩИЙ ТУР:* {t['resort'].split(',')[-1].strip().upper()}! 🔥\n\n"
+                f"🏨 Отель: *{t['hotel']}*\n"
+                f"📍 Курорт: {t['resort']}\n"
+                f"✈️ Вылет из: {t['depart_from']}\n"
+                f"🏢 Туроператор: *{t['operator']}*\n"
+                f"🌙 Ночей: {t['nights']}\n"
+                f"💰 Стоимость: *{t['price_double']:,} руб. на двоих*\n\n"
+                f"{ai_analysis}\n\n"
+                f"🔗 [Быстрое бронирование]({ref_link})"
+            )
+            await message.answer(tour_text, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Ошибка горящих туров: {e}")
+        await message.answer("❌ Не удалось получить горящие туры. Попробуйте позже.")
+
+
+# --- ХЕНДЛЕРЫ ИНДИВИДУАЛЬНОГО ПОИСКА ("🔍 Поиск тура" / `/find`) ---
+
+@router.message(lambda message: message.text == "🔍 Поиск тура")
 @router.message(Command("find"))
 async def cmd_find(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("🗺 Введите страну назначения (например: *Турция, Египет, ОАЭ, Тайланд*):", parse_mode="Markdown")
+    await message.answer(
+        "🗺 Введите страну назначения (например: *Турция, Египет, ОАЭ, Тайланд, Мальдивы*):",
+        parse_mode="Markdown",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
     await state.set_state(TourSearchForm.waiting_for_country)
 
 
@@ -383,12 +451,12 @@ async def process_country(message: types.Message, state: FSMContext):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await message.answer("✈️ Выберите город вылета:", reply_markup=keyboard)
-    await state.set_state(TourSearchForm.waiting_for_date)
+    await message.answer("✈️ Выберите город вылета из списка ниже или введите свой:", reply_markup=keyboard)
+    await state.set_state(TourSearchForm.waiting_for_city)
 
 
-@router.message(TourSearchForm.waiting_for_date)
-async def process_date(message: types.Message, state: FSMContext):
+@router.message(TourSearchForm.waiting_for_city)
+async def process_city(message: types.Message, state: FSMContext):
     city_text = message.text.strip()
     depart_city = "Moscow"
     if city_text == "Санкт-Петербург":
@@ -401,11 +469,11 @@ async def process_date(message: types.Message, state: FSMContext):
         "📅 Введите дату вылета в формате ДД.ММ.ГГГГ (или введите 'ближайшие' для поиска на ближайшие дни):",
         reply_markup=types.ReplyKeyboardRemove()
     )
-    await state.set_state(TourSearchForm.waiting_for_nights)
+    await state.set_state(TourSearchForm.waiting_for_date)
 
 
-@router.message(TourSearchForm.waiting_for_nights)
-async def process_nights(message: types.Message, state: FSMContext):
+@router.message(TourSearchForm.waiting_for_date)
+async def process_date(message: types.Message, state: FSMContext):
     date_val = message.text.strip()
     if date_val.lower() != "ближайшие":
         try:
@@ -415,12 +483,12 @@ async def process_nights(message: types.Message, state: FSMContext):
             return
 
     await state.update_data(date=date_val)
-    await message.answer("🌙 Укажите количество ночей (например, 7):")
-    await state.set_state(TourSearchForm.waiting_for_people)
+    await message.answer("🌙 Укажите желаемое количество ночей (например, 7):")
+    await state.set_state(TourSearchForm.waiting_for_nights)
 
 
-@router.message(TourSearchForm.waiting_for_people)
-async def process_people(message: types.Message, state: FSMContext):
+@router.message(TourSearchForm.waiting_for_nights)
+async def process_nights(message: types.Message, state: FSMContext):
     try:
         nights = int(message.text.strip())
         if nights <= 0:
@@ -430,34 +498,104 @@ async def process_people(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(nights=nights)
-    await message.answer("👥 Укажите количество человек (например, 2):")
+    await message.answer("👥 Сколько взрослых туристов поедет? (Введите число, например: 2):")
+    await state.set_state(TourSearchForm.waiting_for_adults)
+
+
+@router.message(TourSearchForm.waiting_for_adults)
+async def process_adults(message: types.Message, state: FSMContext):
+    try:
+        adults = int(message.text.strip())
+        if adults <= 0:
+            raise ValueError()
+    except ValueError:
+        await message.answer("❌ Укажите корректное положительное число взрослых туристов:")
+        return
+
+    await state.update_data(adults=adults)
+
+    # Спрашиваем про количество детей
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Без детей"), types.KeyboardButton(text="1 ребенок")],
+            [types.KeyboardButton(text="2 детей"), types.KeyboardButton(text="3 детей")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("👶 Сколько детей поедет с вами?", reply_markup=keyboard)
+    await state.set_state(TourSearchForm.waiting_for_children)
+
+
+@router.message(TourSearchForm.waiting_for_children)
+async def process_children(message: types.Message, state: FSMContext):
+    text = message.text.strip().lower()
+    children_count = 0
+    if "без" in text:
+        children_count = 0
+    elif "1" in text:
+        children_count = 1
+    elif "2" in text:
+        children_count = 2
+    elif "3" in text:
+        children_count = 3
+    else:
+        try:
+            children_count = int(text)
+            if children_count < 0:
+                raise ValueError()
+        except ValueError:
+            await message.answer("❌ Укажите корректное число детей:")
+            return
+
+    await state.update_data(children=children_count)
+
+    # Кнопки выбора звездности
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="3* отели"), types.KeyboardButton(text="4* отели")],
+            [types.KeyboardButton(text="5* отели"), types.KeyboardButton(text="Любая звездность")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("⭐ Выберите категорию отеля (количество звезд):", reply_markup=keyboard)
     await state.set_state(TourSearchForm.waiting_for_stars)
 
 
 @router.message(TourSearchForm.waiting_for_stars)
 async def process_stars(message: types.Message, state: FSMContext):
-    try:
-        people = int(message.text.strip())
-        if people <= 0:
-            raise ValueError()
-    except ValueError:
-        await message.answer("❌ Укажите корректное положительное число человек:")
-        return
+    text = message.text.strip()
+    stars = 3
+    if "3" in text:
+        stars = 3
+    elif "4" in text:
+        stars = 4
+    elif "5" in text:
+        stars = 5
+    else:
+        stars = 3  # По умолчанию
 
-    await state.update_data(people=people)
-    await message.answer("⭐ Категория отеля (от 3 до 5 звезд):")
-    await state.set_state(TourSearchForm.waiting_for_stars)
+    await state.update_data(stars=stars)
+
+    # Кнопки питания
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="AI - Все включено"), types.KeyboardButton(text="UAI - Ультра все включено")],
+            [types.KeyboardButton(text="BB - Только завтраки"), types.KeyboardButton(text="HB - Завтрак и ужин")],
+            [types.KeyboardButton(text="Без значения (Любое)")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("🍽 Выберите тип питания в отеле:", reply_markup=keyboard)
+    await state.set_state(TourSearchForm.waiting_for_food)
 
 
-@router.message(TourSearchForm.waiting_for_stars)
+@router.message(TourSearchForm.waiting_for_food)
 async def process_final_search(message: types.Message, state: FSMContext):
-    try:
-        stars = int(message.text.strip())
-        if not 3 <= stars <= 5:
-            raise ValueError()
-    except ValueError:
-        await message.answer("❌ Укажите звездность отеля от 3 до 5:")
-        return
+    food_choice = message.text.strip()
+    await state.update_data(food=food_choice)
 
     user_data = await state.get_data()
     await state.clear()
@@ -466,23 +604,32 @@ async def process_final_search(message: types.Message, state: FSMContext):
     depart_city = user_data["depart_city"]
     date_str = user_data["date"]
     nights = user_data["nights"]
-    people = user_data["people"]
+    adults = user_data["adults"]
+    children = user_data["children"]
+    stars = user_data["stars"]
+    food = user_data["food"]
 
     if date_str.lower() == "ближайшие":
         date_from = (datetime.now() + timedelta(days=3)).strftime("%d.%m.%Y")
     else:
         date_from = date_str
 
-    waiting_msg = await message.answer("🔍 *Ищем лучшие предложения по базам всех операторов РФ и Беларуси...*", parse_mode="Markdown")
+    waiting_msg = await message.answer(
+        "🔍 *Ищем лучшие предложения по базам всех операторов РФ и Беларуси...*",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
+    )
 
     try:
         tours = await fetch_cheapest_tours(
             country=country,
             date_from=date_from,
             nights=nights,
-            people=people,
+            adults=adults,
+            children=children,
             stars=stars,
-            depart_city=depart_city
+            depart_city=depart_city,
+            food=food
         )
 
         await waiting_msg.delete()
@@ -503,7 +650,8 @@ async def process_final_search(message: types.Message, state: FSMContext):
                 price=t["price_double"],
                 nights=t["nights"],
                 stars=t["stars"],
-                operator_name=t["operator"]
+                operator_name=t["operator"],
+                food=t["food"]
             )
 
             tour_text = (
@@ -511,10 +659,10 @@ async def process_final_search(message: types.Message, state: FSMContext):
                 f"📍 Курорт: {t['resort']}\n"
                 f"✈️ Вылет из: {t['depart_from']}\n"
                 f"🏢 Туроператор: *{t['operator']}*\n"
+                f"🍽 Питание: *{t['food']}*\n"
                 f"🌙 Ночей: {t['nights']}\n"
-                f"👥 Количество гостей: {t['people']}\n"
-                f"💰 Цена за человека: *{t['price']:,} руб.*\n"
-                f"💵 Полная стоимость тура: *{t['price_double']:,} руб.*\n\n"
+                f"👥 Количество взрослых: {adults} | Детей: {children}\n"
+                f"💰 Полная стоимость тура на всех: *{t['price_double']:,} руб.*\n\n"
                 f"{ai_analysis}\n\n"
                 f"🔗 [Забронировать тур со скидкой]({ref_link})"
             )
@@ -547,7 +695,8 @@ async def auto_posting_loop(bot: Bot):
                     tours = await fetch_cheapest_tours(
                         country=country,
                         stars=4,
-                        depart_city=city
+                        depart_city=city,
+                        food="Все включено"
                     )
 
                     if tours:
@@ -561,7 +710,8 @@ async def auto_posting_loop(bot: Bot):
                             price=best_tour["price_double"],
                             nights=best_tour["nights"],
                             stars=best_tour["stars"],
-                            operator_name=best_tour["operator"]
+                            operator_name=best_tour["operator"],
+                            food="Все включено"
                         )
 
                         post_text = (
@@ -608,9 +758,8 @@ async def main_bot():
     if ADMIN_ID != 0:
         print(f"[СТАТУС] Задан ID Администратора: {ADMIN_ID}", flush=True)
     else:
-        print("[СТАТУС] Внимание: ID Администратора не настроен (любой пользователь может использовать админ-команды).", flush=True)
+        print("[СТАТУС] Внимание: ID Администратора не настроен.", flush=True)
 
-    # Проверка канала
     channel = load_channel_id()
     if channel:
         print(f"[СТАТУС] Привязанный канал для репостов: {channel}", flush=True)
@@ -620,18 +769,16 @@ async def main_bot():
     print("[СЕТЬ] Попытка установить соединение с серверами Telegram...", flush=True)
     try:
         bot = Bot(token=BOT_TOKEN)
-        # Проверяем токен запросом get_me
         me = await bot.get_me()
         print(f"[СЕТЬ] Успешное подключение! Имя бота: @{me.username}", flush=True)
     except Exception as e:
         print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться к Telegram: {e}", flush=True)
         sys.exit(1)
 
-    # Запуск фонового процесса автопостинга
     asyncio.create_task(auto_posting_loop(bot))
     print("[СЛУЖБА] Фоновый процесс автопостинга туров запущен (интервал: 60 минут).", flush=True)
 
-    print("\n[ЗАПУСК] Бот готов к работе и принимает сообщения от пользователей!", flush=True)
+    print("\n[ЗАПУСК] Бот Leo Travel готов к работе и принимает сообщения от пользователей!", flush=True)
     print("Для остановки нажмите Ctrl+C в окне консоли.\n", flush=True)
 
     try:
