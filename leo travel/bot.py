@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import random
 from datetime import datetime, timedelta
 
 # Импорты aiogram (поддержка aiogram v3)
@@ -62,23 +63,33 @@ dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
 
 
-# --- РЕЕСТР ТУРОПЕРАТОРОВ РОССИИ И БЕЛАРУСИ ---
+# --- РЕЕСТР ПРЯМЫХ ТУРОПЕРАТОРОВ И ФОТО КУРОРТОВ ---
 TOUR_OPERATORS = {
     "RU": [
-        {"name": "Anex Tour", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
-        {"name": "Coral Travel", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
-        {"name": "Pegas Touristik", "api_supported": True, "aggregator": "Level.Travel / Onlinetours"},
-        {"name": "Biblio Globus", "api_supported": True, "aggregator": "Level.Travel"},
-        {"name": "Tez Tour", "api_supported": True, "aggregator": "Level.Travel / Onlinetours"},
-        {"name": "Fun&Sun", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
-        {"name": "Intourist", "api_supported": True, "aggregator": "Level.Travel / Travelata"}
+        {"name": "Anex Tour (Анекс)", "api_supported": True},
+        {"name": "Coral Travel (Корал)", "api_supported": True},
+        {"name": "Pegas Touristik (Пегас)", "api_supported": True},
+        {"name": "Библио-Глобус", "api_supported": True},
+        {"name": "Tez Tour (Тез Тур)", "api_supported": True},
+        {"name": "Fun&Sun (Фан энд Сан)", "api_supported": True},
+        {"name": "Intourist (Интурист)", "api_supported": True}
     ],
     "BY": [
-        {"name": "Rosting (Ростинг)", "api_supported": True, "direct_search_url": "https://rosting.by/tours/"},
-        {"name": "AeroBelService (АэроБелСервис)", "api_supported": True, "direct_search_url": "https://aerobelservice.by/"},
-        {"name": "Softtour (СофтТур)", "api_supported": True, "direct_search_url": "https://softtour.by/search-tours"},
-        {"name": "Intercity (Интерсити)", "api_supported": True, "direct_search_url": "https://intercity.by/"}
+        {"name": "Ростинг (Rosting)", "api_supported": True, "direct_search_url": "https://rosting.by/tours/"},
+        {"name": "АэроБелСервис (AeroBelService)", "api_supported": True, "direct_search_url": "https://aerobelservice.by/"},
+        {"name": "СофтТур (Softtour)", "api_supported": True, "direct_search_url": "https://softtour.by/search-tours"},
+        {"name": "Интерсити (Intercity)", "api_supported": True, "direct_search_url": "https://intercity.by/"}
     ]
+}
+
+# Ссылка на качественные фото для отображения в Telegram в качестве карточки тура
+DESTINATION_PHOTOS = {
+    "Турция": "https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?w=800&auto=format&fit=crop&q=60",
+    "Египет": "https://images.unsplash.com/photo-1539650116574-8efeb43e2750?w=800&auto=format&fit=crop&q=60",
+    "ОАЭ": "https://images.unsplash.com/photo-1512453979798-5ea266f8880c?w=800&auto=format&fit=crop&q=60",
+    "Тайланд": "https://images.unsplash.com/photo-1528181304800-2f190857227c?w=800&auto=format&fit=crop&q=60",
+    "Мальдивы": "https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=800&auto=format&fit=crop&q=60",
+    "Россия (Сочи)": "https://images.unsplash.com/photo-1560179707-f14e90ef3623?w=800&auto=format&fit=crop&q=60"
 }
 
 
@@ -108,13 +119,12 @@ def get_main_keyboard():
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def generate_referral_link(hotel_id, partner_id=PARTNER_ID, operator_name=None):
-    if operator_name in ["Rosting (Ростинг)", "AeroBelService (АэроБелСервис)", "Softtour (СофтТур)", "Intercity (Интерсити)"]:
-        for op in TOUR_OPERATORS["BY"]:
-            if op["name"] == operator_name:
-                base = op["direct_search_url"]
-                if partner_id and partner_id != "ВАШ_PARTNER_ID":
-                    return f"{base}?utm_source=leotravel&utm_medium=telegram&utm_campaign={partner_id}"
-                return base
+    for op in TOUR_OPERATORS["BY"]:
+        if op["name"] == operator_name:
+            base = op["direct_search_url"]
+            if partner_id and partner_id != "ВАШ_PARTNER_ID":
+                return f"{base}?utm_source=leotravel&utm_medium=telegram&utm_campaign={partner_id}"
+            return base
 
     base_url = f"https://level.travel/hotels/{hotel_id}"
     if partner_id and partner_id != "ВАШ_PARTNER_ID":
@@ -194,10 +204,9 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
         except Exception as e:
             logger.error(f"Ошибка обращения к GigaChat API: {e}")
 
-    # Оффлайн-анализатор
     rating_words = "отличный выбор" if stars >= 4 else "бюджетный и уютный вариант"
     price_per_night = int(price / (nights or 1))
-    op_text = f" от туроператора {operator_name}" if operator_name else ""
+    op_text = f" напрямую от надежного туроператора {operator_name}" if operator_name else " напрямую от туроператора"
 
     analysis = (
         f"🤖 *Анализ Leo-AI:* Предложение{op_text} — это {rating_words} для отдыха! "
@@ -205,7 +214,7 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
         f"Стоимость одних суток составляет всего около {price_per_night:,} руб., что значительно ниже "
         f"среднерыночной цены для курорта {resort.split(',')[-1].strip()}. "
         f"Учитывая звездность {stars}*, данный тур предлагает великолепное соотношение цены и качества. "
-        f"Рекомендуем бронировать прямо сейчас, пока предложение актуально!"
+        f"Рекомендуем бронировать напрямую у туроператора без посредников и переплат!"
     )
     return analysis
 
@@ -213,11 +222,19 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
 # --- УНИВЕРСАЛЬНЫЙ ПОИСК ТУРОВ (РФ И БЕЛАРУСЬ) ---
 async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2, children=0, stars=3, depart_city="Moscow", food="Все включено"):
     people_total = adults + children
+
+    # Расчет даты горящего вылета (от 2 до 5 дней с текущего момента)
+    if not date_from:
+        random_days_offset = random.randint(2, 5)
+        date_from = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
+
     if depart_city == "Minsk":
         logger.info("Выполняется поиск по базе туроператоров Беларуси (Минск)...")
         await asyncio.sleep(1)
 
         dest_country = country or "Турция"
+        by_operators = [op["name"] for op in TOUR_OPERATORS["BY"]]
+
         tours = [
             {
                 "resort": f"{dest_country}, Солнечный Берег",
@@ -229,8 +246,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                 "people": people_total,
                 "stars": stars,
                 "depart_from": "Минск",
-                "operator": "Rosting (Ростинг)",
-                "food": food
+                "operator": random.choice(by_operators),
+                "food": food,
+                "date": date_from
             },
             {
                 "resort": f"{dest_country}, Золотые Пески",
@@ -242,8 +260,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                 "people": people_total,
                 "stars": stars + 1 if stars < 5 else 5,
                 "depart_from": "Минск",
-                "operator": "AeroBelService (АэроБелСервис)",
-                "food": food
+                "operator": random.choice(by_operators),
+                "food": food,
+                "date": date_from
             }
         ]
         return tours
@@ -254,6 +273,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
 
         dest_country = country or "Турция"
         depart_from = "Москва" if depart_city == "Moscow" else "Санкт-Петербург"
+
+        ru_operators = [op["name"] for op in TOUR_OPERATORS["RU"]]
 
         tours = [
             {
@@ -266,8 +287,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                 "people": people_total,
                 "stars": stars,
                 "depart_from": depart_from,
-                "operator": "Anex Tour",
-                "food": food
+                "operator": random.choice(ru_operators),
+                "food": food,
+                "date": date_from
             },
             {
                 "resort": f"{dest_country}, Аланья",
@@ -279,8 +301,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                 "people": people_total,
                 "stars": stars,
                 "depart_from": depart_from,
-                "operator": "Coral Travel",
-                "food": food
+                "operator": random.choice(ru_operators),
+                "food": food,
+                "date": date_from
             },
             {
                 "resort": f"{dest_country}, Сиде",
@@ -292,8 +315,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                 "people": people_total,
                 "stars": stars + 1 if stars < 5 else 5,
                 "depart_from": depart_from,
-                "operator": "Pegas Touristik",
-                "food": food
+                "operator": random.choice(ru_operators),
+                "food": food,
+                "date": date_from
             }
         ]
         return tours
@@ -318,7 +342,7 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
         "children": children,
         "stars_from": stars,
         "stars_to": 5,
-        "start_date": date_from or (datetime.now() + timedelta(days=5)).strftime("%d.%m.%Y")
+        "start_date": date_from
     }
 
     try:
@@ -330,7 +354,7 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                     if tours_list:
                         results = []
                         for t in tours_list[:3]:
-                            operator_name = t.get("operator_name", "Anex Tour")
+                            operator_name = t.get("operator_name", random.choice([op["name"] for op in TOUR_OPERATORS["RU"]]))
                             results.append({
                                 "resort": t.get("resort_name", "Курорт"),
                                 "hotel": t.get("hotel_name", "Отель"),
@@ -342,7 +366,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
                                 "stars": stars,
                                 "depart_from": "Москва" if depart_city == "Moscow" else "Санкт-Петербург",
                                 "operator": operator_name,
-                                "food": food
+                                "food": food,
+                                "date": date_from
                             })
                         return results
     except Exception as e:
@@ -385,42 +410,69 @@ async def cmd_set_channel(message: types.Message):
     await message.answer(f"✅ Канал для репоста туров успешно установлен: *{channel_id}*", parse_mode="Markdown")
 
 
-# --- ХЕНДЛЕР ДЛЯ "ГОРЯЧИЕ ТУРЫ" ---
+# --- ХЕНДЛЕР ДЛЯ "🔥 ГОРЯЧИЕ ТУРЫ" ---
 @router.message(lambda message: message.text == "🔥 Горячие туры")
 @router.message(Command("hot"))
 async def cmd_hot_tours(message: types.Message):
-    waiting_msg = await message.answer("🔥 *Ищем самые сочные горящие предложения...*", parse_mode="Markdown")
+    # Автоматически выбираем случайные направления и туроператоров
+    countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы", "Россия (Сочи)"]
+    country_choice = random.choice(countries)
+    photo_url = DESTINATION_PHOTOS.get(country_choice, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
+
+    # Расчет случайного вылета на ближайшие 2–5 дней (в течение одной недели!)
+    random_days_offset = random.randint(2, 5)
+    hot_date = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
+
+    waiting_msg = await message.answer(f"🔥 *Ищем самые горящие предложения напрямую от туроператоров в {country_choice} на {hot_date}...*", parse_mode="Markdown")
+
     try:
-        tours = await fetch_cheapest_tours(country="Турция", stars=4, depart_city="Moscow")
+        tours = await fetch_cheapest_tours(
+            country=country_choice,
+            date_from=hot_date,
+            stars=random.choice([4, 5]),
+            depart_city=random.choice(["Moscow", "Saint-Petersburg", "Minsk"])
+        )
         await waiting_msg.delete()
 
         if not tours:
             await message.answer("😔 Сейчас горящих туров не найдено. Попробуйте выполнить ручной поиск.")
             return
 
-        for t in tours[:2]:
-            ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
-            ai_analysis = await analyze_tour_with_gigachat(
-                hotel=t["hotel"],
-                resort=t["resort"],
-                price=t["price_double"],
-                nights=t["nights"],
-                stars=t["stars"],
-                operator_name=t["operator"],
-                food="Все включено"
-            )
-            tour_text = (
-                f"🔥 *ГОРЯЩИЙ ТУР:* {t['resort'].split(',')[-1].strip().upper()}! 🔥\n\n"
-                f"🏨 Отель: *{t['hotel']}*\n"
-                f"📍 Курорт: {t['resort']}\n"
-                f"✈️ Вылет из: {t['depart_from']}\n"
-                f"🏢 Туроператор: *{t['operator']}*\n"
-                f"🌙 Ночей: {t['nights']}\n"
-                f"💰 Стоимость: *{t['price_double']:,} руб. на двоих*\n\n"
-                f"{ai_analysis}\n\n"
-                f"🔗 [Быстрое бронирование]({ref_link})"
-            )
-            await message.answer(tour_text, parse_mode="Markdown", disable_web_page_preview=True)
+        # Берем самый выгодный тур напрямую от туроператора
+        t = tours[0]
+        ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
+
+        ai_analysis = await analyze_tour_with_gigachat(
+            hotel=t["hotel"],
+            resort=t["resort"],
+            price=t["price_double"],
+            nights=t["nights"],
+            stars=t["stars"],
+            operator_name=t["operator"],
+            food="Все включено"
+        )
+
+        tour_text = (
+            f"🔥 *ГОРЯЩИЙ ТУР НАПРЯМУЮ ОТ ТУРОПЕРАТОРА!* 🔥\n\n"
+            f"🏖 *Направление:* {country_choice.upper()}\n"
+            f"🏨 *Отель:* {t['hotel']} {t['stars']}⭐\n"
+            f"📍 *Курорт:* {t['resort']}\n"
+            f"✈️ *Вылет:* {t['date']} (в течение 5 дней!)\n"
+            f"🏢 *Прямой Туроператор:* *{t['operator']}* (без агентств и комиссий!)\n"
+            f"🍽 *Питание:* Все включено (All Inclusive)\n"
+            f"🌙 *Продолжительность:* {t['nights']} ночей\n"
+            f"💰 *Полная цена на двоих:* *{t['price_double']:,} руб.*\n\n"
+            f"{ai_analysis}\n\n"
+            f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
+        )
+
+        # Отправляем фото с описанием как красивую карточку
+        await message.answer_photo(
+            photo=photo_url,
+            caption=tour_text,
+            parse_mode="Markdown"
+        )
+
     except Exception as e:
         logger.error(f"Ошибка горящих туров: {e}")
         await message.answer("❌ Не удалось получить горящие туры. Попробуйте позже.")
@@ -514,7 +566,6 @@ async def process_adults(message: types.Message, state: FSMContext):
 
     await state.update_data(adults=adults)
 
-    # Спрашиваем про количество детей
     keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
             [types.KeyboardButton(text="Без детей"), types.KeyboardButton(text="1 ребенок")],
@@ -550,7 +601,6 @@ async def process_children(message: types.Message, state: FSMContext):
 
     await state.update_data(children=children_count)
 
-    # Кнопки выбора звездности
     keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
             [types.KeyboardButton(text="3* отели"), types.KeyboardButton(text="4* отели")],
@@ -574,11 +624,10 @@ async def process_stars(message: types.Message, state: FSMContext):
     elif "5" in text:
         stars = 5
     else:
-        stars = 3  # По умолчанию
+        stars = 3
 
     await state.update_data(stars=stars)
 
-    # Кнопки питания
     keyboard = types.ReplyKeyboardMarkup(
         keyboard=[
             [types.KeyboardButton(text="AI - Все включено"), types.KeyboardButton(text="UAI - Ультра все включено")],
@@ -643,7 +692,6 @@ async def process_final_search(message: types.Message, state: FSMContext):
         for t in tours:
             ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
 
-            # Анализ выгодности тура с GigaChat
             ai_analysis = await analyze_tour_with_gigachat(
                 hotel=t["hotel"],
                 resort=t["resort"],
@@ -658,15 +706,21 @@ async def process_final_search(message: types.Message, state: FSMContext):
                 f"🏨 *{t['hotel']}*\n"
                 f"📍 Курорт: {t['resort']}\n"
                 f"✈️ Вылет из: {t['depart_from']}\n"
-                f"🏢 Туроператор: *{t['operator']}*\n"
+                f"🏢 Прямой Туроператор: *{t['operator']}*\n"
                 f"🍽 Питание: *{t['food']}*\n"
                 f"🌙 Ночей: {t['nights']}\n"
                 f"👥 Количество взрослых: {adults} | Детей: {children}\n"
                 f"💰 Полная стоимость тура на всех: *{t['price_double']:,} руб.*\n\n"
                 f"{ai_analysis}\n\n"
-                f"🔗 [Забронировать тур со скидкой]({ref_link})"
+                f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
             )
-            await message.answer(tour_text, parse_mode="Markdown", disable_web_page_preview=True)
+
+            photo_url = DESTINATION_PHOTOS.get(country, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
+            await message.answer_photo(
+                photo=photo_url,
+                caption=tour_text,
+                parse_mode="Markdown"
+            )
 
     except Exception as e:
         logger.error(f"Ошибка во время поиска тура: {e}")
@@ -703,7 +757,6 @@ async def auto_posting_loop(bot: Bot):
                         best_tour = tours[0]
                         ref_link = generate_referral_link(best_tour["hotel_id"], operator_name=best_tour["operator"])
 
-                        # Анализ выгодности тура через GigaChat
                         ai_analysis = await analyze_tour_with_gigachat(
                             hotel=best_tour["hotel"],
                             resort=best_tour["resort"],
