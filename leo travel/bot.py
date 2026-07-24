@@ -135,6 +135,54 @@ def generate_referral_link(hotel_id, partner_id=PARTNER_ID, operator_name=None):
     return base_url
 
 
+# --- БЕЗОПАСНЫЙ ОТПРАВИТЕЛЬ С ФОТО-БЭКАПОМ ---
+async def safe_send_tour(target, photo_url, text, parse_mode="Markdown", bot=None, chat_id=None):
+    """
+    Безопасно отправляет карточку тура с фотографией.
+    Если сервера Telegram не могут скачать картинку из Unsplash (Bad Request: failed to get HTTP URL content),
+    метод автоматически переключается на текстовую отправку без потери информации!
+
+    :param target: Объект сообщения (types.Message) или None, если отправка идет по id
+    """
+    try:
+        if target:
+            # Отправка в ответ на сообщение пользователя
+            await target.answer_photo(
+                photo=photo_url,
+                caption=text,
+                parse_mode=parse_mode
+            )
+        elif bot and chat_id:
+            # Отправка по крону конкретному пользователю
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_url,
+                caption=text,
+                parse_mode=parse_mode
+            )
+        logger.info("Карточка тура успешно отправлена с фото.")
+    except Exception as e:
+        logger.warning(f"Сервер Telegram не смог загрузить фото по URL ({e}). Отправляем резервную текстовую версию...")
+        try:
+            # Резервная отправка чистым текстом
+            if target:
+                await target.answer(
+                    text,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=True
+                )
+            elif bot and chat_id:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=True
+                )
+            logger.info("Резервная текстовая версия тура успешно доставлена.")
+        except Exception as ex:
+            logger.error(f"Не удалось доставить даже текстовую версию тура: {ex}")
+
+
 # --- ИНТЕГРАЦИЯ GIGACHAT ---
 async def get_gigachat_token():
     if not GIGACHAT_CREDENTIALS:
@@ -382,7 +430,6 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Добавляем пользователя в общий список пользователей
     ALL_USERS.add(message.chat.id)
 
     welcome_text = (
@@ -419,7 +466,6 @@ async def cmd_set_channel(message: types.Message):
 @router.message(lambda message: message.text == "🔥 Горячие туры")
 @router.message(Command("hot"))
 async def cmd_hot_tours(message: types.Message):
-    # Добавляем пользователя в список всех пользователей и в активные подписки (персональная отправка каждые 30 мин)
     ALL_USERS.add(message.chat.id)
     HOT_TOUR_SUBSCRIBERS.add(message.chat.id)
 
@@ -479,11 +525,8 @@ async def cmd_hot_tours(message: types.Message):
             f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
         )
 
-        await message.answer_photo(
-            photo=photo_url,
-            caption=tour_text,
-            parse_mode="Markdown"
-        )
+        # Используем безопасный отправитель!
+        await safe_send_tour(target=message, photo_url=photo_url, text=tour_text)
 
     except Exception as e:
         logger.error(f"Ошибка горящих туров: {e}")
@@ -729,11 +772,8 @@ async def process_final_search(message: types.Message, state: FSMContext):
             )
 
             photo_url = DESTINATION_PHOTOS.get(country, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
-            await message.answer_photo(
-                photo=photo_url,
-                caption=tour_text,
-                parse_mode="Markdown"
-            )
+            # Используем безопасный отправитель!
+            await safe_send_tour(target=message, photo_url=photo_url, text=tour_text)
 
     except Exception as e:
         logger.error(f"Ошибка во время поиска тура: {e}")
@@ -795,12 +835,8 @@ async def personal_hot_tours_subscriber_loop(bot: Bot):
                         f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
                     )
 
-                    await bot.send_photo(
-                        chat_id=user_id,
-                        photo=photo_url,
-                        caption=tour_text,
-                        parse_mode="Markdown"
-                    )
+                    # Безопасно отправляем с фото или без!
+                    await safe_send_tour(target=None, photo_url=photo_url, text=tour_text, bot=bot, chat_id=user_id)
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Успешно отправлен персональный горящий тур пользователю {user_id}", flush=True)
             except Exception as e:
                 logger.error(f"Не удалось отправить персональный тур пользователю {user_id}: {e}")
@@ -932,7 +968,6 @@ async def main_bot():
         print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться к Telegram: {e}", flush=True)
         sys.exit(1)
 
-    # Запускаем все три фоновых процесса
     asyncio.create_task(auto_posting_loop(bot))
     asyncio.create_task(personal_hot_tours_subscriber_loop(bot))
     asyncio.create_task(all_users_notification_loop(bot))
