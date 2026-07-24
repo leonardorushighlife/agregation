@@ -38,6 +38,10 @@ ONLINETOURS_API_KEY = os.getenv("ONLINETOURS_API_KEY", "")
 # Файл локальной конфигурации для хранения ID канала
 CONFIG_FILE = "bot_config.txt"
 
+# --- БД ПОЛЬЗОВАТЕЛЕЙ И ПОДПИСОК (хранится в оперативной памяти) ---
+ALL_USERS = set()               # Все пользователи, запустившие бота
+HOT_TOUR_SUBSCRIBERS = set()    # Пользователи, запросившие персональный автопоиск горящих туров каждые 30 минут
+
 
 def save_channel_id(channel_id):
     try:
@@ -82,7 +86,6 @@ TOUR_OPERATORS = {
     ]
 }
 
-# Ссылка на качественные фото для отображения в Telegram в качестве карточки тура
 DESTINATION_PHOTOS = {
     "Турция": "https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?w=800&auto=format&fit=crop&q=60",
     "Египет": "https://images.unsplash.com/photo-1539650116574-8efeb43e2750?w=800&auto=format&fit=crop&q=60",
@@ -223,14 +226,13 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operat
 async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2, children=0, stars=3, depart_city="Moscow", food="Все включено"):
     people_total = adults + children
 
-    # Расчет даты горящего вылета (от 2 до 5 дней с текущего момента)
     if not date_from:
         random_days_offset = random.randint(2, 5)
         date_from = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
 
     if depart_city == "Minsk":
         logger.info("Выполняется поиск по базе туроператоров Беларуси (Минск)...")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
         dest_country = country or "Турция"
         by_operators = [op["name"] for op in TOUR_OPERATORS["BY"]]
@@ -269,7 +271,7 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
 
     if not LEVEL_TRAVEL_API_KEY or LEVEL_TRAVEL_API_KEY == "ВАШ_LEVEL_TRAVEL_API_KEY":
         logger.info("Используется демонстрационный режим поиска туров РФ (Level.Travel API key не задан).")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
         dest_country = country or "Турция"
         depart_from = "Москва" if depart_city == "Moscow" else "Санкт-Петербург"
@@ -380,6 +382,9 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, adults=2,
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Добавляем пользователя в общий список пользователей
+    ALL_USERS.add(message.chat.id)
+
     welcome_text = (
         "👋 Добро пожаловать в *Leo Travel* — ваш личный помощник по поиску лучших туров по базам всех туроператоров России и Беларуси!\n\n"
         "Мы подключили напрямую и через агрегаторы следующие системы:\n"
@@ -414,16 +419,25 @@ async def cmd_set_channel(message: types.Message):
 @router.message(lambda message: message.text == "🔥 Горячие туры")
 @router.message(Command("hot"))
 async def cmd_hot_tours(message: types.Message):
-    # Автоматически выбираем случайные направления и туроператоров
+    # Добавляем пользователя в список всех пользователей и в активные подписки (персональная отправка каждые 30 мин)
+    ALL_USERS.add(message.chat.id)
+    HOT_TOUR_SUBSCRIBERS.add(message.chat.id)
+
     countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы", "Россия (Сочи)"]
     country_choice = random.choice(countries)
     photo_url = DESTINATION_PHOTOS.get(country_choice, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
 
-    # Расчет случайного вылета на ближайшие 2–5 дней (в течение одной недели!)
     random_days_offset = random.randint(2, 5)
     hot_date = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
 
-    waiting_msg = await message.answer(f"🔥 *Ищем самые горящие предложения напрямую от туроператоров в {country_choice} на {hot_date}...*", parse_mode="Markdown")
+    await message.answer(
+        "🔥 *Вы успешно подписались на персональные горящие туры!*\n\n"
+        "Каждые 30 минут я буду автоматически искать новые горящие туры в течение недели (вылет за 2–5 дней) и отправлять их *лично вам*! 👇\n"
+        "А вот первое предложение на сегодня:",
+        parse_mode="Markdown"
+    )
+
+    waiting_msg = await message.answer(f"🔎 *Ищем горящий тур напрямую от туроператоров...*", parse_mode="Markdown")
 
     try:
         tours = await fetch_cheapest_tours(
@@ -435,10 +449,9 @@ async def cmd_hot_tours(message: types.Message):
         await waiting_msg.delete()
 
         if not tours:
-            await message.answer("😔 Сейчас горящих туров не найдено. Попробуйте выполнить ручной поиск.")
+            await message.answer("😔 Сейчас горящих туров не найдено. Я продолжу поиск в фоновом режиме!")
             return
 
-        # Берем самый выгодный тур напрямую от туроператора
         t = tours[0]
         ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
 
@@ -466,7 +479,6 @@ async def cmd_hot_tours(message: types.Message):
             f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
         )
 
-        # Отправляем фото с описанием как красивую карточку
         await message.answer_photo(
             photo=photo_url,
             caption=tour_text,
@@ -475,7 +487,7 @@ async def cmd_hot_tours(message: types.Message):
 
     except Exception as e:
         logger.error(f"Ошибка горящих туров: {e}")
-        await message.answer("❌ Не удалось получить горящие туры. Попробуйте позже.")
+        await message.answer("❌ Не удалось получить горящие туры. Я продолжу фоновый поиск!")
 
 
 # --- ХЕНДЛЕРЫ ИНДИВИДУАЛЬНОГО ПОИСКА ("🔍 Поиск тура" / `/find`) ---
@@ -483,6 +495,7 @@ async def cmd_hot_tours(message: types.Message):
 @router.message(lambda message: message.text == "🔍 Поиск тура")
 @router.message(Command("find"))
 async def cmd_find(message: types.Message, state: FSMContext):
+    ALL_USERS.add(message.chat.id)
     await state.clear()
     await message.answer(
         "🗺 Введите страну назначения (например: *Турция, Египет, ОАЭ, Тайланд, Мальдивы*):",
@@ -727,13 +740,104 @@ async def process_final_search(message: types.Message, state: FSMContext):
         await message.answer("❌ Произошла ошибка во время поиска туров. Попробуйте позже.")
 
 
-# --- ФОНОВАЯ ЗАДАЧА АВТОПОСТИНГА (60 минут) ---
+# --- ФОНОВЫЕ ПОТОКИ/ЗАДАЧИ ---
 
+# 1. Персональная отправка горящих туров подписчикам каждые 30 минут
+async def personal_hot_tours_subscriber_loop(bot: Bot):
+    while True:
+        await asyncio.sleep(1800) # Интервал 30 минут
+        if not HOT_TOUR_SUBSCRIBERS:
+            continue
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Фоновый поиск персональных горящих туров для {len(HOT_TOUR_SUBSCRIBERS)} подписчиков...", flush=True)
+
+        countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы", "Россия (Сочи)"]
+
+        for user_id in list(HOT_TOUR_SUBSCRIBERS):
+            try:
+                country_choice = random.choice(countries)
+                random_days_offset = random.randint(2, 5)
+                hot_date = (datetime.now() + timedelta(days=random_days_offset)).strftime("%d.%m.%Y")
+
+                tours = await fetch_cheapest_tours(
+                    country=country_choice,
+                    date_from=hot_date,
+                    stars=random.choice([4, 5]),
+                    depart_city=random.choice(["Moscow", "Saint-Petersburg", "Minsk"])
+                )
+
+                if tours:
+                    t = tours[0]
+                    ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
+                    photo_url = DESTINATION_PHOTOS.get(country_choice, "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800")
+
+                    ai_analysis = await analyze_tour_with_gigachat(
+                        hotel=t["hotel"],
+                        resort=t["resort"],
+                        price=t["price_double"],
+                        nights=t["nights"],
+                        stars=t["stars"],
+                        operator_name=t["operator"],
+                        food="Все включено"
+                    )
+
+                    tour_text = (
+                        f"✨ *ПЕРСОНАЛЬНЫЙ ГОРЯЩИЙ ТУР ДЛЯ ВАС!* (Обновление каждые 30 минут) ✨\n\n"
+                        f"🏖 *Направление:* {country_choice.upper()}\n"
+                        f"🏨 *Отель:* {t['hotel']} {t['stars']}⭐\n"
+                        f"📍 *Курорт:* {t['resort']}\n"
+                        f"✈️ *Вылет:* {t['date']} (в течение 5 дней!)\n"
+                        f"🏢 *Прямой Туроператор:* *{t['operator']}*\n"
+                        f"🍽 *Питание:* Все включено\n"
+                        f"🌙 *Продолжительность:* {t['nights']} ночей\n"
+                        f"💰 *Полная цена на двоих:* *{t['price_double']:,} руб.*\n\n"
+                        f"{ai_analysis}\n\n"
+                        f"🔗 [Забронировать напрямую у {t['operator']}]({ref_link})"
+                    )
+
+                    await bot.send_photo(
+                        chat_id=user_id,
+                        photo=photo_url,
+                        caption=tour_text,
+                        parse_mode="Markdown"
+                    )
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Успешно отправлен персональный горящий тур пользователю {user_id}", flush=True)
+            except Exception as e:
+                logger.error(f"Не удалось отправить персональный тур пользователю {user_id}: {e}")
+
+
+# 2. Общее уведомление для всех пользователей раз в 1 час
+async def all_users_notification_loop(bot: Bot):
+    while True:
+        await asyncio.sleep(3600) # Интервал 60 минут (1 час)
+        if not ALL_USERS:
+            continue
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Рассылка общего уведомления для всех пользователей ({len(ALL_USERS)} получателей)...", flush=True)
+
+        notification_text = (
+            "🌴 *Найден отличный тур! Пора отдыхать...* 🌴\n\n"
+            "Не упускайте возможность провести незабываемый отпуск по лучшим ценам напрямую от туроператоров России и Беларуси!\n\n"
+            "Нажмите на кнопку *🔥 Горячие туры* для подбора персональных предложений с вылетом в течение недели, или воспользуйтесь кнопкой *🔍 Поиск тура*!"
+        )
+
+        for user_id in list(ALL_USERS):
+            try:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=notification_text,
+                    parse_mode="Markdown",
+                    reply_markup=get_main_keyboard()
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить общее уведомление пользователю {user_id}: {e}")
+
+
+# 3. Автопостинг в канал раз в 60 минут
 async def auto_posting_loop(bot: Bot):
     while True:
         channel_id = load_channel_id()
         if not channel_id:
-            logger.info("Канал для автопостинга не настроен. Ждем 60 минут...")
             await asyncio.sleep(3600)
             continue
 
@@ -828,8 +932,14 @@ async def main_bot():
         print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться к Telegram: {e}", flush=True)
         sys.exit(1)
 
+    # Запускаем все три фоновых процесса
     asyncio.create_task(auto_posting_loop(bot))
-    print("[СЛУЖБА] Фоновый процесс автопостинга туров запущен (интервал: 60 минут).", flush=True)
+    asyncio.create_task(personal_hot_tours_subscriber_loop(bot))
+    asyncio.create_task(all_users_notification_loop(bot))
+
+    print("[СЛУЖБА] Фоновый процесс автопостинга туров в канал запущен (интервал: 60 минут).", flush=True)
+    print("[СЛУЖБА] Фоновый процесс персональной рассылки горящих туров запущен (интервал: 30 минут).", flush=True)
+    print("[СЛУЖБА] Фоновый процесс общих уведомлений для всех пользователей запущен (интервал: 60 минут).", flush=True)
 
     print("\n[ЗАПУСК] Бот Leo Travel готов к работе и принимает сообщения от пользователей!", flush=True)
     print("Для остановки нажмите Ctrl+C в окне консоли.\n", flush=True)
