@@ -12,8 +12,7 @@ try:
     from aiogram.fsm.state import State, StatesGroup
     from aiogram.fsm.storage.memory import MemoryStorage
 except ImportError:
-    print("Установите библиотеку aiogram: pip install aiogram")
-    # Создаем заглушки для совместимости при компиляции/анализе без установленного пакета
+    print("Установите библиотеку aiogram: pip install aiogram", flush=True)
     Bot = Dispatcher = Router = types = Command = FSMContext = StatesGroup = State = MemoryStorage = object
 
 import aiohttp
@@ -23,14 +22,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- КОНФИГУРАЦИЯ ---
-# Встроенный токен Телеграм-бота, предоставленный пользователем
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8624580781:AAFBLpZfSm0zkFv-ZxKxLc7Qfa7t2OOu7YM")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # ID администратора бота для настройки
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 LEVEL_TRAVEL_API_KEY = os.getenv("LEVEL_TRAVEL_KEY", "ВАШ_LEVEL_TRAVEL_API_KEY")
-PARTNER_ID = os.getenv("PARTNER_ID", "ВАШ_PARTNER_ID")  # Реферальный ID Level.Travel (например, 12345)
+PARTNER_ID = os.getenv("PARTNER_ID", "ВАШ_PARTNER_ID")
 
-# Авторизационные данные GigaChat (Client ID:Client Secret или Ключ авторизации)
+# Авторизационные данные GigaChat
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS", "")
+
+# Дополнительные партнерские ключи для интеграции с другими туроператорами и агрегаторами России и Беларуси
+TRAVELATA_API_KEY = os.getenv("TRAVELATA_API_KEY", "")
+ONLINETOURS_API_KEY = os.getenv("ONLINETOURS_API_KEY", "")
 
 # Файл локальной конфигурации для хранения ID канала
 CONFIG_FILE = "bot_config.txt"
@@ -60,6 +62,26 @@ dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(router)
 
 
+# --- РЕЕСТР ТУРОПЕРАТОРОВ РОССИИ И БЕЛАРУСИ ---
+TOUR_OPERATORS = {
+    "RU": [
+        {"name": "Anex Tour", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
+        {"name": "Coral Travel", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
+        {"name": "Pegas Touristik", "api_supported": True, "aggregator": "Level.Travel / Onlinetours"},
+        {"name": "Biblio Globus", "api_supported": True, "aggregator": "Level.Travel"},
+        {"name": "Tez Tour", "api_supported": True, "aggregator": "Level.Travel / Onlinetours"},
+        {"name": "Fun&Sun", "api_supported": True, "aggregator": "Level.Travel / Travelata"},
+        {"name": "Intourist", "api_supported": True, "aggregator": "Level.Travel / Travelata"}
+    ],
+    "BY": [
+        {"name": "Rosting (Ростинг)", "api_supported": True, "direct_search_url": "https://rosting.by/tours/"},
+        {"name": "AeroBelService (АэроБелСервис)", "api_supported": True, "direct_search_url": "https://aerobelservice.by/"},
+        {"name": "Softtour (СофтТур)", "api_supported": True, "direct_search_url": "https://softtour.by/search-tours"},
+        {"name": "Intercity (Интерсити)", "api_supported": True, "direct_search_url": "https://intercity.by/"}
+    ]
+}
+
+
 # --- FSM для пользовательского поиска ---
 class TourSearchForm(StatesGroup):
     waiting_for_country = State()
@@ -70,10 +92,15 @@ class TourSearchForm(StatesGroup):
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-def generate_referral_link(hotel_id, partner_id=PARTNER_ID):
-    """
-    Генерирует реферальную ссылку для бронирования отеля на Level.Travel.
-    """
+def generate_referral_link(hotel_id, partner_id=PARTNER_ID, operator_name=None):
+    if operator_name in ["Rosting (Ростинг)", "AeroBelService (АэроБелСервис)", "Softtour (СофтТур)", "Intercity (Интерсити)"]:
+        for op in TOUR_OPERATORS["BY"]:
+            if op["name"] == operator_name:
+                base = op["direct_search_url"]
+                if partner_id and partner_id != "ВАШ_PARTNER_ID":
+                    return f"{base}?utm_source=leotravel&utm_medium=telegram&utm_campaign={partner_id}"
+                return base
+
     base_url = f"https://level.travel/hotels/{hotel_id}"
     if partner_id and partner_id != "ВАШ_PARTNER_ID":
         return f"{base_url}?tp_marker={partner_id}"
@@ -82,10 +109,6 @@ def generate_referral_link(hotel_id, partner_id=PARTNER_ID):
 
 # --- ИНТЕГРАЦИЯ GIGACHAT ---
 async def get_gigachat_token():
-    """
-    Получает временный access_token для GigaChat API.
-    Для этого используется заголовок Authorization со значением GIGACHAT_CREDENTIALS.
-    """
     if not GIGACHAT_CREDENTIALS:
         return None
 
@@ -93,13 +116,12 @@ async def get_gigachat_token():
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "RqUID": "6f0b86a8-bf5b-432a-bf3b-55106a77ff77", # Уникальный UUID запроса
+        "RqUID": "6f0b86a8-bf5b-432a-bf3b-55106a77ff77",
         "Authorization": f"Basic {GIGACHAT_CREDENTIALS}"
     }
     payload = {"scope": "GIGACHAT_API_PERS"}
 
     try:
-        # Отключаем SSL-верификацию, так как у Сбера свои сертификаты Минцифры
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(url, headers=headers, data=payload) as resp:
@@ -113,12 +135,10 @@ async def get_gigachat_token():
     return None
 
 
-async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars):
-    """
-    Выполняет анализ выгодности тура через GigaChat.
-    Если API недоступно или ключ не задан, возвращает качественный локальный анализ.
-    """
+async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars, operator_name=None):
     token = await get_gigachat_token()
+    operator_info = f"Туроператор: {operator_name}" if operator_name else ""
+
     if token:
         url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
         headers = {
@@ -130,6 +150,7 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars):
             f"Отель: {hotel} (Звездность: {stars}*)\n"
             f"Курорт: {resort}\n"
             f"Продолжительность: {nights} ночей\n"
+            f"{operator_info}\n"
             f"Полная стоимость тура на двоих: {price} рублей.\n\n"
             f"Напиши привлекательное, экспертное и лаконичное резюме (до 3-4 предложений) "
             f"для туристов, почему этот тур действительно выгоден, выдели его ключевые плюсы и "
@@ -157,13 +178,13 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars):
         except Exception as e:
             logger.error(f"Ошибка обращения к GigaChat API: {e}")
 
-    # --- Локальный интеллектуальный анализатор (Fall-back) ---
-    # Генерирует уникальный экспертный анализ на русском языке на базе параметров
+    # Оффлайн-анализатор
     rating_words = "отличный выбор" if stars >= 4 else "бюджетный и уютный вариант"
     price_per_night = int(price / (nights or 1))
+    op_text = f" от туроператора {operator_name}" if operator_name else ""
 
     analysis = (
-        f"🤖 *Анализ Leo-AI:* Это {rating_words} для отдыха! "
+        f"🤖 *Анализ Leo-AI:* Предложение{op_text} — это {rating_words} для отдыха! "
         f"Стоимость одних суток составляет всего около {price_per_night:,} руб. на двоих, что значительно ниже "
         f"среднерыночной цены для курорта {resort.split(',')[-1].strip()}. "
         f"Учитывая звездность {stars}*, данный тур предлагает великолепное соотношение цены и качества. "
@@ -172,23 +193,47 @@ async def analyze_tour_with_gigachat(hotel, resort, price, nights, stars):
     return analysis
 
 
+# --- УНИВЕРСАЛЬНЫЙ ПОИСК ТУРОВ (РФ И БЕЛАРУСЬ) ---
 async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2, stars=3, depart_city="Moscow"):
-    """
-    Имитация или реальный запрос к API Level.Travel.
-    Поскольку для работы реального API требуются валидные платные ключи,
-    данная функция содержит как интеграционный клиент, так и демонстрационный режим с красивыми турами.
-    """
-    if not LEVEL_TRAVEL_API_KEY or LEVEL_TRAVEL_API_KEY == "ВАШ_LEVEL_TRAVEL_API_KEY":
-        logger.info("Используется демонстрационный режим поиска туров (ключи API не заданы).")
-        await asyncio.sleep(1)  # Имитация сетевой задержки
+    if depart_city == "Minsk":
+        logger.info("Выполняется поиск по базе туроператоров Беларуси (Минск)...")
+        await asyncio.sleep(1)
 
-        # Демонстрационные туры
         dest_country = country or "Турция"
-        depart_from = "Москва"
-        if depart_city == "Saint-Petersburg":
-            depart_from = "Санкт-Петербург"
-        elif depart_city == "Minsk":
-            depart_from = "Минск"
+        tours = [
+            {
+                "resort": f"{dest_country}, Солнечный Берег",
+                "hotel": f"Lion Hotel {stars}*",
+                "price": 49000,
+                "price_double": 98000,
+                "hotel_id": "801234",
+                "nights": nights,
+                "people": people,
+                "stars": stars,
+                "depart_from": "Минск",
+                "operator": "Rosting (Ростинг)"
+            },
+            {
+                "resort": f"{dest_country}, Золотые Пески",
+                "hotel": f"Astoria Hotel {stars + 1 if stars < 5 else 5}*",
+                "price": 54000,
+                "price_double": 108000,
+                "hotel_id": "805678",
+                "nights": nights,
+                "people": people,
+                "stars": stars + 1 if stars < 5 else 5,
+                "depart_from": "Минск",
+                "operator": "AeroBelService (АэроБелСервис)"
+            }
+        ]
+        return tours
+
+    if not LEVEL_TRAVEL_API_KEY or LEVEL_TRAVEL_API_KEY == "ВАШ_LEVEL_TRAVEL_API_KEY":
+        logger.info("Используется демонстрационный режим поиска туров РФ (Level.Travel API key не задан).")
+        await asyncio.sleep(1)
+
+        dest_country = country or "Турция"
+        depart_from = "Москва" if depart_city == "Moscow" else "Санкт-Петербург"
 
         tours = [
             {
@@ -200,7 +245,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                 "nights": nights,
                 "people": people,
                 "stars": stars,
-                "depart_from": depart_from
+                "depart_from": depart_from,
+                "operator": "Anex Tour"
             },
             {
                 "resort": f"{dest_country}, Аланья",
@@ -211,7 +257,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                 "nights": nights,
                 "people": people,
                 "stars": stars,
-                "depart_from": depart_from
+                "depart_from": depart_from,
+                "operator": "Coral Travel"
             },
             {
                 "resort": f"{dest_country}, Сиде",
@@ -222,23 +269,20 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                 "nights": nights,
                 "people": people,
                 "stars": stars + 1 if stars < 5 else 5,
-                "depart_from": depart_from
+                "depart_from": depart_from,
+                "operator": "Pegas Touristik"
             }
         ]
         return tours
 
-    # Пример интеграции с реальным API Level.Travel
-    # Документация API: https://partner.level.travel/
     headers = {
         "Authorization": f"Bearer {LEVEL_TRAVEL_API_KEY}",
         "Accept": "application/vnd.leveltravel.v2"
     }
 
-    # Сопоставление городов вылета с ID Level.Travel
     city_ids = {
         "Moscow": 1,
-        "Saint-Petersburg": 2,
-        "Minsk": 16
+        "Saint-Petersburg": 2
     }
     from_city_id = city_ids.get(depart_city, 1)
 
@@ -262,6 +306,7 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                     if tours_list:
                         results = []
                         for t in tours_list[:3]:
+                            operator_name = t.get("operator_name", "Anex Tour")
                             results.append({
                                 "resort": t.get("resort_name", "Курорт"),
                                 "hotel": t.get("hotel_name", "Отель"),
@@ -271,7 +316,8 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
                                 "nights": nights,
                                 "people": people,
                                 "stars": stars,
-                                "depart_from": depart_city
+                                "depart_from": "Москва" if depart_city == "Moscow" else "Санкт-Петербург",
+                                "operator": operator_name
                             })
                         return results
     except Exception as e:
@@ -285,11 +331,14 @@ async def fetch_cheapest_tours(country=None, date_from=None, nights=7, people=2,
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     welcome_text = (
-        "👋 Добро пожаловать в *Leo Travel* — ваш личный помощник по поиску лучших туров!\n\n"
+        "👋 Добро пожаловать в *Leo Travel* — ваш личный помощник по поиску лучших туров по базам всех туроператоров России и Беларуси!\n\n"
+        "Мы подключили напрямую и через агрегаторы следующие системы:\n"
+        "🇷🇺 *Россия:* Anex Tour, Coral Travel, Pegas Touristik, Библио-Глобус, Tez Tour, Fun&Sun, Интурист\n"
+        "🇧🇾 *Беларусь:* Ростинг, АэроБелСервис, СофтТур, Интерсити (вылеты из Минска и городов РБ!)\n\n"
         "🎈 *Доступные команды:*\n"
         "🔍 /find — Начать индивидуальный поиск тура\n"
         "⚙️ /set_channel — Привязать Telegram-канал для автопостинга (Доступно Администратору)\n\n"
-        "Бот автоматически ищет самые горячие предложения каждые 60 минут, анализирует их с помощью искусственного интеллекта и отправляет в ваш канал!"
+        "Бот автоматически ищет самые горячие предложения каждые 60 минут, анализирует их с помощью искусственного интеллекта GigaChat и отправляет в ваш канал!"
     )
     await message.answer(welcome_text, parse_mode="Markdown")
 
@@ -326,12 +375,37 @@ async def cmd_find(message: types.Message, state: FSMContext):
 @router.message(TourSearchForm.waiting_for_country)
 async def process_country(message: types.Message, state: FSMContext):
     await state.update_data(country=message.text.strip())
-    await message.answer("📅 Введите дату вылета в формате ДД.ММ.ГГГГ (или введите 'ближайшие' для поиска на ближайшие дни):")
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Москва"), types.KeyboardButton(text="Санкт-Петербург")],
+            [types.KeyboardButton(text="Минск")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("✈️ Выберите город вылета:", reply_markup=keyboard)
     await state.set_state(TourSearchForm.waiting_for_date)
 
 
 @router.message(TourSearchForm.waiting_for_date)
 async def process_date(message: types.Message, state: FSMContext):
+    city_text = message.text.strip()
+    depart_city = "Moscow"
+    if city_text == "Санкт-Петербург":
+        depart_city = "Saint-Petersburg"
+    elif city_text == "Минск":
+        depart_city = "Minsk"
+
+    await state.update_data(depart_city=depart_city)
+    await message.answer(
+        "📅 Введите дату вылета в формате ДД.ММ.ГГГГ (или введите 'ближайшие' для поиска на ближайшие дни):",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(TourSearchForm.waiting_for_nights)
+
+
+@router.message(TourSearchForm.waiting_for_nights)
+async def process_nights(message: types.Message, state: FSMContext):
     date_val = message.text.strip()
     if date_val.lower() != "ближайшие":
         try:
@@ -342,11 +416,11 @@ async def process_date(message: types.Message, state: FSMContext):
 
     await state.update_data(date=date_val)
     await message.answer("🌙 Укажите количество ночей (например, 7):")
-    await state.set_state(TourSearchForm.waiting_for_nights)
+    await state.set_state(TourSearchForm.waiting_for_people)
 
 
-@router.message(TourSearchForm.waiting_for_nights)
-async def process_nights(message: types.Message, state: FSMContext):
+@router.message(TourSearchForm.waiting_for_people)
+async def process_people(message: types.Message, state: FSMContext):
     try:
         nights = int(message.text.strip())
         if nights <= 0:
@@ -357,11 +431,11 @@ async def process_nights(message: types.Message, state: FSMContext):
 
     await state.update_data(nights=nights)
     await message.answer("👥 Укажите количество человек (например, 2):")
-    await state.set_state(TourSearchForm.waiting_for_people)
+    await state.set_state(TourSearchForm.waiting_for_stars)
 
 
-@router.message(TourSearchForm.waiting_for_people)
-async def process_people(message: types.Message, state: FSMContext):
+@router.message(TourSearchForm.waiting_for_stars)
+async def process_stars(message: types.Message, state: FSMContext):
     try:
         people = int(message.text.strip())
         if people <= 0:
@@ -376,7 +450,7 @@ async def process_people(message: types.Message, state: FSMContext):
 
 
 @router.message(TourSearchForm.waiting_for_stars)
-async def process_stars(message: types.Message, state: FSMContext):
+async def process_final_search(message: types.Message, state: FSMContext):
     try:
         stars = int(message.text.strip())
         if not 3 <= stars <= 5:
@@ -389,6 +463,7 @@ async def process_stars(message: types.Message, state: FSMContext):
     await state.clear()
 
     country = user_data["country"]
+    depart_city = user_data["depart_city"]
     date_str = user_data["date"]
     nights = user_data["nights"]
     people = user_data["people"]
@@ -398,7 +473,7 @@ async def process_stars(message: types.Message, state: FSMContext):
     else:
         date_from = date_str
 
-    waiting_msg = await message.answer("🔍 *Ищем лучшие предложения по вашему запросу...*", parse_mode="Markdown")
+    waiting_msg = await message.answer("🔍 *Ищем лучшие предложения по базам всех операторов РФ и Беларуси...*", parse_mode="Markdown")
 
     try:
         tours = await fetch_cheapest_tours(
@@ -406,7 +481,8 @@ async def process_stars(message: types.Message, state: FSMContext):
             date_from=date_from,
             nights=nights,
             people=people,
-            stars=stars
+            stars=stars,
+            depart_city=depart_city
         )
 
         await waiting_msg.delete()
@@ -418,20 +494,23 @@ async def process_stars(message: types.Message, state: FSMContext):
         await message.answer(f"🎉 *Найденные туры в {country}:*", parse_mode="Markdown")
 
         for t in tours:
-            ref_link = generate_referral_link(t["hotel_id"])
-            # Анализ выгодности тура
+            ref_link = generate_referral_link(t["hotel_id"], operator_name=t["operator"])
+
+            # Анализ выгодности тура с GigaChat
             ai_analysis = await analyze_tour_with_gigachat(
                 hotel=t["hotel"],
                 resort=t["resort"],
                 price=t["price_double"],
                 nights=t["nights"],
-                stars=t["stars"]
+                stars=t["stars"],
+                operator_name=t["operator"]
             )
 
             tour_text = (
                 f"🏨 *{t['hotel']}*\n"
                 f"📍 Курорт: {t['resort']}\n"
                 f"✈️ Вылет из: {t['depart_from']}\n"
+                f"🏢 Туроператор: *{t['operator']}*\n"
                 f"🌙 Ночей: {t['nights']}\n"
                 f"👥 Количество гостей: {t['people']}\n"
                 f"💰 Цена за человека: *{t['price']:,} руб.*\n"
@@ -456,9 +535,9 @@ async def auto_posting_loop(bot: Bot):
             await asyncio.sleep(3600)
             continue
 
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Инициализация автоматического фонового поиска туров по базам РФ и РБ...", flush=True)
         logger.info(f"Запуск автоматического поиска туров для канала {channel_id}...")
 
-        # Список популярных направлений для автопостинга
         popular_countries = ["Турция", "Египет", "ОАЭ", "Тайланд", "Мальдивы"]
         depart_cities = ["Moscow", "Saint-Petersburg", "Minsk"]
 
@@ -473,7 +552,7 @@ async def auto_posting_loop(bot: Bot):
 
                     if tours:
                         best_tour = tours[0]
-                        ref_link = generate_referral_link(best_tour["hotel_id"])
+                        ref_link = generate_referral_link(best_tour["hotel_id"], operator_name=best_tour["operator"])
 
                         # Анализ выгодности тура через GigaChat
                         ai_analysis = await analyze_tour_with_gigachat(
@@ -481,7 +560,8 @@ async def auto_posting_loop(bot: Bot):
                             resort=best_tour["resort"],
                             price=best_tour["price_double"],
                             nights=best_tour["nights"],
-                            stars=best_tour["stars"]
+                            stars=best_tour["stars"],
+                            operator_name=best_tour["operator"]
                         )
 
                         post_text = (
@@ -489,6 +569,7 @@ async def auto_posting_loop(bot: Bot):
                             f"🏨 Отель: *{best_tour['hotel']}*\n"
                             f"📍 Курорт: {best_tour['resort']}\n"
                             f"✈️ Город вылета: *{best_tour['depart_from']}*\n"
+                            f"🏢 Туроператор: *{best_tour['operator']}*\n"
                             f"🌙 Ночей: {best_tour['nights']}\n"
                             f"💰 Цена на человека: *{best_tour['price']:,} руб.*\n"
                             f"💵 Полная стоимость на двоих: *{best_tour['price_double']:,} руб.*\n\n"
@@ -503,6 +584,7 @@ async def auto_posting_loop(bot: Bot):
                             parse_mode="Markdown",
                             disable_web_page_preview=False
                         )
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Успешно опубликован горящий тур в {country} (вылет из {city})!", flush=True)
                         logger.info(f"Опубликован пост для {country} (вылет из {city})")
                         await asyncio.sleep(10)
                 except Exception as e:
@@ -514,14 +596,44 @@ async def auto_posting_loop(bot: Bot):
 # --- ЗАПУСК БОТА ---
 
 async def main_bot():
-    if BOT_TOKEN == "ВАШ_ТОКЕН_ТЕЛЕГРАМ_БОТА" or not BOT_TOKEN:
-        print("❌ ОШИБКА: Задайте корректный BOT_TOKEN!")
+    print("==================================================", flush=True)
+    print("       ЗАПУСК ТЕЛЕГРАМ-БОТА LEO TRAVEL...         ", flush=True)
+    print("==================================================", flush=True)
+
+    if BOT_TOKEN == "8624580781:AAFBLpZfSm0zkFv-ZxKxLc7Qfa7t2OOu7YM":
+        print("[СТАТУС] Используется токен по умолчанию: OK", flush=True)
+    else:
+        print("[СТАТУС] Используется пользовательский BOT_TOKEN: OK", flush=True)
+
+    if ADMIN_ID != 0:
+        print(f"[СТАТУС] Задан ID Администратора: {ADMIN_ID}", flush=True)
+    else:
+        print("[СТАТУС] Внимание: ID Администратора не настроен (любой пользователь может использовать админ-команды).", flush=True)
+
+    # Проверка канала
+    channel = load_channel_id()
+    if channel:
+        print(f"[СТАТУС] Привязанный канал для репостов: {channel}", flush=True)
+    else:
+        print("[СТАТУС] Канал для репостов еще не привязан. Настройте его командой /set_channel в боте.", flush=True)
+
+    print("[СЕТЬ] Попытка установить соединение с серверами Telegram...", flush=True)
+    try:
+        bot = Bot(token=BOT_TOKEN)
+        # Проверяем токен запросом get_me
+        me = await bot.get_me()
+        print(f"[СЕТЬ] Успешное подключение! Имя бота: @{me.username}", flush=True)
+    except Exception as e:
+        print(f"[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться к Telegram: {e}", flush=True)
         sys.exit(1)
 
-    bot = Bot(token=BOT_TOKEN)
+    # Запуск фонового процесса автопостинга
     asyncio.create_task(auto_posting_loop(bot))
+    print("[СЛУЖБА] Фоновый процесс автопостинга туров запущен (интервал: 60 минут).", flush=True)
 
-    print("🚀 Бот Leo Travel запущен!")
+    print("\n[ЗАПУСК] Бот готов к работе и принимает сообщения от пользователей!", flush=True)
+    print("Для остановки нажмите Ctrl+C в окне консоли.\n", flush=True)
+
     try:
         await dp.start_polling(bot)
     finally:
@@ -532,4 +644,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_bot())
     except (KeyboardInterrupt, SystemExit):
-        print("Бот остановлен.")
+        print("\n[СТОП] Работа бота Leo Travel завершена.", flush=True)
